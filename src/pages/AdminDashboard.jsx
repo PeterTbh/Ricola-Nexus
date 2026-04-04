@@ -1,14 +1,15 @@
 import { useState, useEffect } from "react";
 import {
-  collection, query, where, getDocs, doc, updateDoc,
+  collection, query, where, doc, updateDoc,
   deleteDoc, onSnapshot, orderBy
 } from "firebase/firestore";
+import * as XLSX from "xlsx";
 import { db } from "../firebase";
 import Layout from "../components/Layout";
 import {
-  Users, CheckCircle, XCircle, BarChart3, Package,
-  ChevronDown, ChevronUp, Loader2, UserCheck, UserX,
-  TrendingUp, AlertCircle, Shield, Activity
+  Users, CheckCircle, BarChart3, Package,
+  Loader2, UserCheck, UserX,
+  AlertCircle, Shield, Activity, Download
 } from "lucide-react";
 
 const MONTHS = [
@@ -223,6 +224,58 @@ function ActiveAccounts() {
   );
 }
 
+// ─── Excel download helpers ────────────────────────────────────────────────────
+function downloadIndividualExcel(filtered, selectedMonth) {
+  const rows = filtered.map(d => {
+    const total = (Number(d.product1Tons) || 0) + (Number(d.product2Tons) || 0) + (Number(d.product3Tons) || 0);
+    const submittedAt = d.submittedAt?.toDate?.();
+    return {
+      "Country Head": d.username,
+      "Product 1 (tons)": Number(d.product1Tons) || 0,
+      "Product 2 (tons)": Number(d.product2Tons) || 0,
+      "Product 3 (tons)": Number(d.product3Tons) || 0,
+      "Total (tons)": total,
+      "Submitted At": submittedAt ? submittedAt.toLocaleString("en-US") : "",
+    };
+  });
+
+  // Totals row
+  rows.push({
+    "Country Head": "TOTAL",
+    "Product 1 (tons)": filtered.reduce((s, d) => s + (Number(d.product1Tons) || 0), 0),
+    "Product 2 (tons)": filtered.reduce((s, d) => s + (Number(d.product2Tons) || 0), 0),
+    "Product 3 (tons)": filtered.reduce((s, d) => s + (Number(d.product3Tons) || 0), 0),
+    "Total (tons)": filtered.reduce((s, d) => s + (Number(d.product1Tons) || 0) + (Number(d.product2Tons) || 0) + (Number(d.product3Tons) || 0), 0),
+    "Submitted At": "",
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 22 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, selectedMonth);
+  XLSX.writeFile(wb, `Ricola_Nexus_Individual_${selectedMonth.replace(" ", "_")}.xlsx`);
+}
+
+function downloadAggregatedExcel(aggregated, filtered, selectedMonth) {
+  const total = aggregated.product1 + aggregated.product2 + aggregated.product3;
+  const rows = [
+    { "": "Month", "Value": selectedMonth },
+    { "": "Submissions", "Value": filtered.length },
+    { "": "" },
+    { "": "Product", "Value": "Total Expected Demand (tons)" },
+    { "": "Product 1", "Value": aggregated.product1 },
+    { "": "Product 2", "Value": aggregated.product2 },
+    { "": "Product 3", "Value": aggregated.product3 },
+    { "": "Grand Total", "Value": total },
+  ];
+
+  const ws = XLSX.utils.json_to_sheet(rows, { skipHeader: true });
+  ws["!cols"] = [{ wch: 20 }, { wch: 30 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, `${selectedMonth} Aggregated`);
+  XLSX.writeFile(wb, `Ricola_Nexus_Aggregated_${selectedMonth.replace(" ", "_")}.xlsx`);
+}
+
 // ─── Section: Demand Overview ──────────────────────────────────────────────────
 function DemandOverview() {
   const [demands, setDemands] = useState([]);
@@ -236,7 +289,6 @@ function DemandOverview() {
     const unsubscribe = onSnapshot(q, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setDemands(data);
-      // Build unique months list
       const months = [...new Set(data.map(d => d.month))];
       if (!months.includes(currentMonthStr())) months.unshift(currentMonthStr());
       setAvailableMonths(months);
@@ -261,7 +313,7 @@ function DemandOverview() {
 
   return (
     <div className="space-y-5">
-      {/* Controls */}
+      {/* Controls row */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 justify-between">
         <div className="flex gap-1 p-1 bg-gray-100 rounded-xl">
           <button
@@ -282,15 +334,31 @@ function DemandOverview() {
           </button>
         </div>
 
-        <select
-          value={selectedMonth}
-          onChange={e => setSelectedMonth(e.target.value)}
-          className="px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] bg-white text-gray-700"
-        >
-          {availableMonths.map(m => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={selectedMonth}
+            onChange={e => setSelectedMonth(e.target.value)}
+            className="px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] bg-white text-gray-700"
+          >
+            {availableMonths.map(m => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+
+          <button
+            onClick={() =>
+              view === "individual"
+                ? downloadIndividualExcel(filtered, selectedMonth)
+                : downloadAggregatedExcel(aggregated, filtered, selectedMonth)
+            }
+            disabled={filtered.length === 0}
+            title={`Download ${view === "individual" ? "Individual" : "Aggregated"} View as Excel`}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[#2D6A2D] text-[#2D6A2D] hover:bg-green-50 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            <span className="hidden sm:inline">Export Excel</span>
+          </button>
+        </div>
       </div>
 
       {view === "aggregated" ? (
