@@ -1,7 +1,8 @@
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
-import { Leaf, Clock, LogOut, RefreshCw } from "lucide-react";
+import { Clock, LogOut, RefreshCw } from "lucide-react";
+import RicolaIcon from "../components/RicolaIcon";
 
 export default function PendingPage() {
   const { userProfile, refreshProfile } = useAuth();
@@ -13,8 +14,8 @@ export default function PendingPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#2D6A2D] via-[#1A4A1A] to-[#0f2e0f] px-4">
       <div className="w-full max-w-md text-center">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#F5C500] shadow-lg mb-6">
-          <Leaf className="w-8 h-8 text-[#2D6A2D]" />
+        <div className="inline-flex mb-6 shadow-lg rounded-full">
+          <RicolaIcon size={64} />
         </div>
 
         <div className="bg-white rounded-2xl shadow-2xl p-8">

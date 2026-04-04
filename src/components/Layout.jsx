@@ -2,11 +2,11 @@ import { useState } from "react";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
-import { Leaf, LogOut, Menu, X, ChevronDown } from "lucide-react";
+import { LogOut, ChevronDown } from "lucide-react";
+import RicolaIcon from "./RicolaIcon";
 
 export default function Layout({ children }) {
   const { userProfile, currentUser } = useAuth();
-  const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
 
   const handleSignOut = async () => {
@@ -26,9 +26,7 @@ export default function Layout({ children }) {
           <div className="flex items-center justify-between h-16">
             {/* Logo */}
             <div className="flex items-center gap-3">
-              <div className="flex items-center justify-center w-9 h-9 rounded-full bg-[#F5C500]">
-                <Leaf className="w-5 h-5 text-[#2D6A2D]" />
-              </div>
+              <RicolaIcon size={36} />
               <div>
                 <span className="text-white font-bold text-lg leading-none">Ricola Nexus</span>
                 <p className="text-[#a8d5a8] text-xs leading-none mt-0.5 hidden sm:block">Demand Intelligence</p>

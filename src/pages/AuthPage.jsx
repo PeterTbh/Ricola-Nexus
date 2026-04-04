@@ -2,7 +2,8 @@ import { useState } from "react";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
-import { Leaf, Eye, EyeOff, AlertCircle } from "lucide-react";
+import { Eye, EyeOff, AlertCircle } from "lucide-react";
+import RicolaIcon from "../components/RicolaIcon";
 
 export default function AuthPage() {
   const [mode, setMode] = useState("login"); // "login" | "register"
@@ -72,8 +73,8 @@ export default function AuthPage() {
       <div className="w-full max-w-md relative">
         {/* Logo / Brand */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-[#F5C500] shadow-lg mb-4">
-            <Leaf className="w-8 h-8 text-[#2D6A2D]" />
+          <div className="mb-4 shadow-lg rounded-full">
+            <RicolaIcon size={64} />
           </div>
           <h1 className="text-3xl font-bold text-white tracking-tight">Ricola Nexus</h1>
           <p className="text-[#a8d5a8] mt-1 text-sm">Global Demand Intelligence Platform</p>

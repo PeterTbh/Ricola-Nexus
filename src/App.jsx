@@ -4,13 +4,14 @@ import AuthPage from "./pages/AuthPage";
 import PendingPage from "./pages/PendingPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import CountryHeadDashboard from "./pages/CountryHeadDashboard";
-import { Leaf, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
+import RicolaIcon from "./components/RicolaIcon";
 
 function LoadingScreen() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-[#2D6A2D] to-[#0f2e0f]">
-      <div className="flex items-center justify-center w-16 h-16 rounded-full bg-[#F5C500] mb-4 shadow-lg">
-        <Leaf className="w-8 h-8 text-[#2D6A2D]" />
+      <div className="mb-4 shadow-lg rounded-full">
+        <RicolaIcon size={64} />
       </div>
       <Loader2 className="w-6 h-6 text-[#F5C500] animate-spin" />
     </div>
