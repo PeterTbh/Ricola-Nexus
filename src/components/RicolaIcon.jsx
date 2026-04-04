@@ -4,17 +4,30 @@
  */
 export default function RicolaIcon({ size = 36 }) {
   return (
-    <img
-      src="/ricola-r.png"
-      alt="Ricola"
+    <div
       style={{
         width: size,
         height: size,
         borderRadius: "50%",
-        objectFit: "cover",
+        background: "#F5C500",
         flexShrink: 0,
-        display: "block",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+        padding: "12%",
       }}
-    />
+    >
+      <img
+        src="/ricola-r.png"
+        alt="Ricola"
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          display: "block",
+        }}
+      />
+    </div>
   );
 }
