@@ -4,7 +4,6 @@ import AuthPage from "./pages/AuthPage";
 import PendingPage from "./pages/PendingPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import CountryHeadDashboard from "./pages/CountryHeadDashboard";
-import AdminSetup from "./components/AdminSetup";
 import { Leaf, Loader2 } from "lucide-react";
 
 function LoadingScreen() {
@@ -23,15 +22,12 @@ function AppRoutes() {
 
   if (loading) return <LoadingScreen />;
 
-  // Not logged in — show auth page (and admin setup button)
+  // Not logged in
   if (!currentUser) {
     return (
-      <>
-        <Routes>
-          <Route path="*" element={<AuthPage />} />
-        </Routes>
-        <AdminSetup />
-      </>
+      <Routes>
+        <Route path="*" element={<AuthPage />} />
+      </Routes>
     );
   }
 
