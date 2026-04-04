@@ -3,6 +3,7 @@
  * Size is controlled via the `size` prop (px).
  */
 export default function RicolaIcon({ size = 36 }) {
+  const imgSize = Math.round(size * 0.76);
   return (
     <div
       style={{
@@ -14,16 +15,14 @@ export default function RicolaIcon({ size = 36 }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        overflow: "hidden",
-        padding: "12%",
       }}
     >
       <img
         src="/ricola-r.png"
         alt="Ricola"
         style={{
-          width: "100%",
-          height: "100%",
+          width: imgSize,
+          height: imgSize,
           objectFit: "contain",
           display: "block",
         }}
