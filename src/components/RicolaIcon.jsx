@@ -1,31 +1,20 @@
 /**
- * RicolaIcon — shows just the "R" from the Ricola wordmark PNG,
- * clipped inside a circle. Size is controlled via the `size` prop (px).
+ * RicolaIcon — Ricola "R" icon mark inside a circle.
+ * Size is controlled via the `size` prop (px).
  */
 export default function RicolaIcon({ size = 36 }) {
   return (
-    <div
+    <img
+      src="/ricola-r.png"
+      alt="Ricola"
       style={{
         width: size,
         height: size,
         borderRadius: "50%",
-        background: "#fff",
-        overflow: "hidden",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "flex-start",
+        objectFit: "cover",
         flexShrink: 0,
+        display: "block",
       }}
-    >
-      <img
-        src="/ricola-logo.png"
-        alt="Ricola"
-        style={{
-          height: "62%",
-          width: "auto",
-          marginLeft: "8%",
-        }}
-      />
-    </div>
+    />
   );
 }
