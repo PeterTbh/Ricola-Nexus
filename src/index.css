@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root {
+  --ricola-yellow: #F5C500;
+  --ricola-yellow-dark: #D4A800;
+  --ricola-green: #2D6A2D;
+  --ricola-green-light: #4A9E4A;
+  --ricola-green-dark: #1A4A1A;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: #f8f9fa;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
