@@ -9,8 +9,10 @@ export default function AuthPage() {
   const [mode, setMode] = useState("login"); // "login" | "register"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [username, setUsername] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -23,6 +25,11 @@ export default function AuthPage() {
       if (mode === "register") {
         if (!username.trim()) {
           setError("Please enter a display name.");
+          setLoading(false);
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError("Passwords do not match. Please try again.");
           setLoading(false);
           return;
         }
@@ -85,7 +92,7 @@ export default function AuthPage() {
           {/* Tabs */}
           <div className="flex border-b border-gray-100">
             <button
-              onClick={() => { setMode("login"); setError(""); }}
+              onClick={() => { setMode("login"); setError(""); setConfirmPassword(""); }}
               className={`flex-1 py-4 text-sm font-semibold transition-colors ${
                 mode === "login"
                   ? "text-[#2D6A2D] border-b-2 border-[#F5C500] bg-yellow-50"
@@ -95,7 +102,7 @@ export default function AuthPage() {
               Sign In
             </button>
             <button
-              onClick={() => { setMode("register"); setError(""); }}
+              onClick={() => { setMode("register"); setError(""); setConfirmPassword(""); }}
               className={`flex-1 py-4 text-sm font-semibold transition-colors ${
                 mode === "register"
                   ? "text-[#2D6A2D] border-b-2 border-[#F5C500] bg-yellow-50"
@@ -159,6 +166,31 @@ export default function AuthPage() {
                 </button>
               </div>
             </div>
+
+            {mode === "register" && (
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                  Confirm Password
+                </label>
+                <div className="relative">
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    className="w-full px-4 py-3 pr-12 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {error && (
               <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
