@@ -163,9 +163,11 @@ export default function CountryHeadDashboard() {
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        if (!snap.empty) {
-          setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        const active = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived);
+        if (active.length > 0) {
+          setProducts(active);
         }
+        // else keep DEFAULT_PRODUCTS
         setProductsLoading(false);
       },
       () => setProductsLoading(false)

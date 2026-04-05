@@ -424,6 +424,142 @@ function ProductInfoModal({ product, onClose }) {
   );
 }
 
+// ─── Delete Product Modal ─────────────────────────────────────────────────────
+function DeleteProductModal({ product, onClose }) {
+  const [action, setAction] = useState("archive");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleConfirm = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      if (action === "archive") {
+        await updateDoc(doc(db, "products", product.id), {
+          archived: true,
+          archivedAt: serverTimestamp(),
+        });
+      } else {
+        await deleteDoc(doc(db, "products", product.id));
+      }
+      onClose();
+    } catch (err) {
+      setError("Something went wrong. Please try again.");
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+              <Trash2 className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <h3 className="font-bold text-gray-900">Delete Product</h3>
+              <p className="text-sm text-gray-500">{product.name}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 ml-2">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-600 mb-5">
+          This removes <span className="font-semibold">{product.name}</span> from the product list.
+          Existing demand submissions that reference this product are not affected.
+        </p>
+
+        <div className="space-y-3 mb-5">
+          <label
+            className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${
+              action === "archive"
+                ? "border-[#2D6A2D] bg-green-50"
+                : "border-gray-200 hover:border-gray-300"
+            }`}
+          >
+            <input
+              type="radio"
+              name="productAction"
+              value="archive"
+              checked={action === "archive"}
+              onChange={() => setAction("archive")}
+              className="mt-0.5 accent-[#2D6A2D]"
+            />
+            <div>
+              <p className="font-semibold text-sm text-gray-800 flex items-center gap-1.5">
+                <Archive className="w-3.5 h-3.5 text-[#2D6A2D]" />
+                Archive
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                The product is hidden from the UI but its data remains in the database and can be restored manually.
+              </p>
+            </div>
+          </label>
+
+          <label
+            className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${
+              action === "delete"
+                ? "border-red-400 bg-red-50"
+                : "border-gray-200 hover:border-gray-300"
+            }`}
+          >
+            <input
+              type="radio"
+              name="productAction"
+              value="delete"
+              checked={action === "delete"}
+              onChange={() => setAction("delete")}
+              className="mt-0.5 accent-red-600"
+            />
+            <div>
+              <p className="font-semibold text-sm text-gray-800 flex items-center gap-1.5">
+                <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                Delete permanently
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                The product record is removed from the database entirely. This cannot be undone.
+              </p>
+            </div>
+          </label>
+        </div>
+
+        {error && (
+          <p className="text-xs text-red-500 mb-4 flex items-center gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5" /> {error}
+          </p>
+        )}
+
+        <div className="flex gap-3">
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={loading}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 ${
+              action === "delete"
+                ? "bg-red-600 hover:bg-red-700 text-white"
+                : "bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white"
+            }`}
+          >
+            {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+            {action === "delete" ? "Delete Permanently" : "Archive"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Product Management ────────────────────────────────────────────────────────
 function ProductManagement() {
   const [products, setProducts] = useState([]);
@@ -431,6 +567,7 @@ function ProductManagement() {
   const [infoTarget, setInfoTarget] = useState(null);
   const [editTargetId, setEditTargetId] = useState(null);
   const [editName, setEditName] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [addingNew, setAddingNew] = useState(false);
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -450,7 +587,7 @@ function ProductManagement() {
           await addDoc(collection(db, "products"), { ...p, createdAt: serverTimestamp() });
         }
       } else if (!snap.empty) {
-        setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
         setLoading(false);
       }
     });
@@ -523,8 +660,18 @@ function ProductManagement() {
                 <button
                   onClick={() => { setEditTargetId(null); setEditName(""); }}
                   className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600"
+                  title="Cancel"
                 >
                   <X className="w-3.5 h-3.5" />
+                </button>
+                <div className="w-px h-5 bg-gray-200 mx-0.5" />
+                <button
+                  onClick={() => { setDeleteTarget(product); setEditTargetId(null); setEditName(""); }}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-xs font-medium transition-colors"
+                  title="Delete product"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete
                 </button>
               </div>
             ) : (
@@ -597,6 +744,13 @@ function ProductManagement() {
         <ProductInfoModal
           product={infoTarget}
           onClose={() => setInfoTarget(null)}
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteProductModal
+          product={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
         />
       )}
     </>
@@ -1151,8 +1305,9 @@ function DemandOverview() {
   useEffect(() => {
     const q = query(collection(db, "products"), orderBy("order"));
     const unsubscribe = onSnapshot(q, (snap) => {
-      if (!snap.empty) {
-        setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived);
+      if (all.length > 0) {
+        setProducts(all);
       } else {
         setProducts([
           { key: "product1Tons", name: "Product 1", productId: "", notes: "", order: 0 },
