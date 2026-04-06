@@ -12,7 +12,8 @@ import {
   Loader2, UserCheck, UserX,
   AlertCircle, Shield, Activity, Download,
   Trash2, X, Archive, History, BarChart2, Table,
-  ChevronRight, Info, Plus, Pencil, Save, MessageSquare
+  ChevronRight, Info, Plus, Pencil, Save, MessageSquare,
+  Upload, HelpCircle
 } from "lucide-react";
 
 const MONTHS = [
@@ -560,6 +561,387 @@ function DeleteProductModal({ product, onClose }) {
   );
 }
 
+// ─── Format Info Modal ────────────────────────────────────────────────────────
+function FormatInfoModal({ onClose }) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <HelpCircle className="w-4 h-4 text-[#2D6A2D]" />
+            <h3 className="font-bold text-gray-900">Expected Excel Format</h3>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-600 mb-4">
+          Row 1 must be the header row. Each subsequent row is one product.
+          Only the <span className="font-semibold">Name</span> column is required; the others can be left blank.
+        </p>
+
+        <div className="space-y-3 mb-5">
+          {[
+            { col: "Column A", name: "Name", required: true, desc: 'The product display name. Also accepted: "Product Name".' },
+            { col: "Column B", name: "Product ID", required: false, desc: 'A short identifier such as a SKU. Also accepted: "ID", "Product-ID".' },
+            { col: "Column C", name: "Notes", required: false, desc: 'Free-text notes about the product. Also accepted: "Note".' },
+          ].map(({ col, name, required, desc }) => (
+            <div key={col} className="flex gap-3">
+              <div className="w-20 text-xs font-semibold text-gray-500 shrink-0 pt-0.5">{col}</div>
+              <div>
+                <p className="text-xs font-semibold text-gray-800">
+                  {name}
+                  {required
+                    ? <span className="text-red-500 ml-1">*</span>
+                    : <span className="text-gray-400 font-normal ml-1">(optional)</span>}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="rounded-xl border border-gray-200 overflow-hidden">
+          <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Example</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-100 bg-yellow-50">
+                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Name</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Product ID</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ["Classic Herb Drops", "SKU-001", "Flagship product"],
+                  ["Honey & Herb Drops", "SKU-002", ""],
+                  ["Sugar Free Drops", "", ""],
+                ].map((row, i) => (
+                  <tr key={i} className="border-b border-gray-50 last:border-0">
+                    <td className="px-3 py-2 text-gray-700">{row[0]}</td>
+                    <td className="px-3 py-2 text-gray-600">{row[1] || <span className="text-gray-300 italic">empty</span>}</td>
+                    <td className="px-3 py-2 text-gray-600">{row[2] || <span className="text-gray-300 italic">empty</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <button
+          onClick={onClose}
+          className="w-full mt-5 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Upload Products Modal ─────────────────────────────────────────────────────
+function UploadProductsModal({ onClose }) {
+  const [step, setStep] = useState("upload"); // "upload" | "preview"
+  const [parseError, setParseError] = useState("");
+  const [parsedProducts, setParsedProducts] = useState([]);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [showFormatInfo, setShowFormatInfo] = useState(false);
+  const fileInputRef = useRef(null);
+
+  // Prevent browser from navigating when a file is dropped outside the drop zone
+  useEffect(() => {
+    const prevent = (e) => e.preventDefault();
+    document.addEventListener("dragover", prevent);
+    document.addEventListener("drop", prevent);
+    return () => {
+      document.removeEventListener("dragover", prevent);
+      document.removeEventListener("drop", prevent);
+    };
+  }, []);
+
+  const parseFile = (file) => {
+    setParseError("");
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+        if (rows.length < 2) {
+          setParseError("The file appears to be empty or has no data rows.");
+          return;
+        }
+
+        const header = rows[0].map(h => String(h).toLowerCase().trim());
+        const nameIdx = header.findIndex(h => ["name", "product name"].includes(h));
+        const idIdx   = header.findIndex(h => ["product id", "id", "product-id"].includes(h));
+        const notesIdx = header.findIndex(h => ["notes", "note"].includes(h));
+
+        if (nameIdx === -1) {
+          setParseError('Could not find a "Name" column. Please check the format and try again.');
+          return;
+        }
+
+        const products = rows.slice(1)
+          .filter(row => String(row[nameIdx] ?? "").trim())
+          .map((row, i) => ({
+            _id: `p_${i}`,
+            name: String(row[nameIdx] ?? "").trim(),
+            productId: idIdx >= 0 ? String(row[idIdx] ?? "").trim() : "",
+            notes: notesIdx >= 0 ? String(row[notesIdx] ?? "").trim() : "",
+            included: true,
+          }));
+
+        if (products.length === 0) {
+          setParseError("No valid product rows found. Make sure each row has a non-empty Name.");
+          return;
+        }
+
+        setParsedProducts(products);
+        setStep("preview");
+      } catch (err) {
+        setParseError("Failed to read the file. Please make sure it is a valid .xlsx or .xls file.");
+        console.error(err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) parseFile(file);
+    e.target.value = "";
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) parseFile(file);
+  };
+
+  const updateProduct = (id, field, value) => {
+    setParsedProducts(prev => prev.map(p => p._id === id ? { ...p, [field]: value } : p));
+  };
+
+  const selectedCount = parsedProducts.filter(p => p.included && p.name.trim()).length;
+
+  const handleImport = async () => {
+    if (selectedCount === 0) return;
+    setImporting(true);
+    setImportError("");
+    try {
+      // Query all products (including archived) to avoid key/order collisions
+      const allSnap = await getDocs(collection(db, "products"));
+      const allDocs = allSnap.docs.map(d => d.data());
+
+      let maxNum = 0;
+      let maxOrder = -1;
+      allDocs.forEach(p => {
+        const match = p.key?.match(/^product(\d+)Tons$/);
+        if (match) maxNum = Math.max(maxNum, parseInt(match[1]));
+        if (typeof p.order === "number") maxOrder = Math.max(maxOrder, p.order);
+      });
+
+      const toImport = parsedProducts.filter(p => p.included && p.name.trim());
+      for (const p of toImport) {
+        maxNum   += 1;
+        maxOrder += 1;
+        await addDoc(collection(db, "products"), {
+          name:      p.name.trim(),
+          productId: p.productId.trim(),
+          notes:     p.notes.trim(),
+          key:       `product${maxNum}Tons`,
+          order:     maxOrder,
+          createdAt: serverTimestamp(),
+        });
+      }
+      onClose();
+    } catch (err) {
+      setImportError("Something went wrong during import. Please try again.");
+      console.error(err);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between p-5 border-b border-gray-100 shrink-0">
+            <div className="flex items-center gap-2">
+              <Upload className="w-4 h-4 text-[#2D6A2D]" />
+              <h3 className="font-bold text-gray-800 text-sm">
+                {step === "upload" ? "Import Products from Excel" : "Import Products — Preview"}
+              </h3>
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="overflow-y-auto flex-1 p-5">
+            {step === "upload" ? (
+              <div className="space-y-4">
+                <p className="text-sm text-gray-500">
+                  Upload an Excel file (.xlsx or .xls). Each row becomes one product.
+                </p>
+
+                {/* Drop zone */}
+                <div
+                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e); }}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-gray-200 hover:border-[#4A9E4A] rounded-xl p-10 text-center cursor-pointer transition-colors group"
+                >
+                  <Upload className="w-8 h-8 text-gray-300 group-hover:text-[#4A9E4A] mx-auto mb-3 transition-colors" />
+                  <p className="text-sm font-medium text-gray-500 group-hover:text-[#2D6A2D] transition-colors">
+                    Drop a file here, or click to choose
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">.xlsx · .xls</p>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                </div>
+
+                {parseError && (
+                  <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <p className="text-sm text-red-600">{parseError}</p>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => setShowFormatInfo(true)}
+                  className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-[#2D6A2D] transition-colors"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" />
+                  Expected file format
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-sm text-gray-500">
+                  <span className="font-semibold text-gray-700">{parsedProducts.length}</span> product{parsedProducts.length !== 1 ? "s" : ""} detected.
+                  Uncheck rows to exclude them, or edit any field before importing.
+                </p>
+
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <th className="px-3 py-2.5 w-10" />
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                          Name <span className="text-red-400">*</span>
+                        </th>
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Product ID</th>
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {parsedProducts.map(p => (
+                        <tr key={p._id} className={p.included ? "" : "opacity-40"}>
+                          <td className="px-3 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={p.included}
+                              onChange={e => updateProduct(p._id, "included", e.target.checked)}
+                              className="accent-[#2D6A2D] w-4 h-4 cursor-pointer"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="text"
+                              value={p.name}
+                              onChange={e => updateProduct(p._id, "name", e.target.value)}
+                              placeholder="Product name…"
+                              className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-[#4A9E4A] focus:border-transparent"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="text"
+                              value={p.productId}
+                              onChange={e => updateProduct(p._id, "productId", e.target.value)}
+                              placeholder="e.g. SKU-001"
+                              className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-[#4A9E4A] focus:border-transparent"
+                            />
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="text"
+                              value={p.notes}
+                              onChange={e => updateProduct(p._id, "notes", e.target.value)}
+                              placeholder="Notes…"
+                              className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-[#4A9E4A] focus:border-transparent"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {importError && (
+                  <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <p className="text-sm text-red-600">{importError}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="p-5 border-t border-gray-100 shrink-0 flex gap-3">
+            {step === "preview" ? (
+              <>
+                <button
+                  onClick={() => { setStep("upload"); setParseError(""); }}
+                  disabled={importing}
+                  className="px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors disabled:opacity-60"
+                >
+                  ← Back
+                </button>
+                <button
+                  onClick={handleImport}
+                  disabled={importing || selectedCount === 0}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
+                >
+                  {importing && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {importing ? "Importing…" : `Import ${selectedCount} Product${selectedCount !== 1 ? "s" : ""}`}
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={onClose}
+                className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {showFormatInfo && <FormatInfoModal onClose={() => setShowFormatInfo(false)} />}
+    </>
+  );
+}
+
 // ─── Product Management ────────────────────────────────────────────────────────
 function ProductManagement() {
   const [products, setProducts] = useState([]);
@@ -571,6 +953,8 @@ function ProductManagement() {
   const [addingNew, setAddingNew] = useState(false);
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
+  const [showFormatInfo, setShowFormatInfo] = useState(false);
   const seedingRef = useRef(false);
 
   useEffect(() => {
@@ -590,7 +974,7 @@ function ProductManagement() {
         setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
         setLoading(false);
       }
-    });
+    }, () => setLoading(false));
     return unsubscribe;
   }, []);
 
@@ -621,14 +1005,35 @@ function ProductManagement() {
     setNewName("");
   };
 
-  if (loading) return (
-    <div className="flex justify-center py-12">
-      <Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" />
-    </div>
-  );
-
   return (
     <>
+      {/* Toolbar — always visible */}
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-gray-400">Manage the products country heads forecast for.</p>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setShowFormatInfo(true)}
+            title="Expected Excel format"
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-[#2D6A2D] hover:bg-gray-100 border border-transparent hover:border-gray-200 transition-colors"
+          >
+            <HelpCircle className="w-3.5 h-3.5" />
+            Format
+          </button>
+          <button
+            onClick={() => setShowUpload(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            Upload from Excel
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" />
+        </div>
+      ) : (
       <div className="space-y-2">
         {products.map((product) => (
           <div
@@ -739,6 +1144,7 @@ function ProductManagement() {
           </button>
         )}
       </div>
+      )}
 
       {infoTarget && (
         <ProductInfoModal
@@ -753,6 +1159,9 @@ function ProductManagement() {
           onClose={() => setDeleteTarget(null)}
         />
       )}
+
+      {showUpload && <UploadProductsModal onClose={() => setShowUpload(false)} />}
+      {showFormatInfo && <FormatInfoModal onClose={() => setShowFormatInfo(false)} />}
     </>
   );
 }
