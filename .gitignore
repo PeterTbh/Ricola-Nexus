@@ -14,6 +14,7 @@ dist-ssr
 
 # Local notes (not for version control)
 log.md
+summary.txt
 
 # Editor directories and files
 .vscode/*

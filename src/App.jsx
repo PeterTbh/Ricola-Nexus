@@ -4,6 +4,7 @@ import AuthPage from "./pages/AuthPage";
 import PendingPage from "./pages/PendingPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import CountryHeadDashboard from "./pages/CountryHeadDashboard";
+import HFPlannerCockpit from "./pages/HFPlannerCockpit";
 import { Loader2 } from "lucide-react";
 import RicolaIcon from "./components/RicolaIcon";
 
@@ -57,6 +58,16 @@ function AppRoutes() {
       <Routes>
         <Route path="/dashboard" element={<CountryHeadDashboard />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+    );
+  }
+
+  // HF Planner
+  if (userProfile.role === "hf_planner") {
+    return (
+      <Routes>
+        <Route path="/cockpit" element={<HFPlannerCockpit />} />
+        <Route path="*" element={<Navigate to="/cockpit" replace />} />
       </Routes>
     );
   }

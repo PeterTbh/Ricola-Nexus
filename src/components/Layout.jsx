@@ -13,10 +13,14 @@ export default function Layout({ children }) {
     await signOut(auth);
   };
 
-  const roleLabel = userProfile?.role === "admin" ? "Administrator" : "Country Head";
-  const roleBadgeColor = userProfile?.role === "admin"
-    ? "bg-yellow-100 text-yellow-800"
-    : "bg-green-100 text-green-800";
+  const roleLabel =
+    userProfile?.role === "admin" ? "Administrator" :
+    userProfile?.role === "hf_planner" ? "HF Planner" :
+    "Country Head";
+  const roleBadgeColor =
+    userProfile?.role === "admin" ? "bg-yellow-100 text-yellow-800" :
+    userProfile?.role === "hf_planner" ? "bg-blue-100 text-blue-800" :
+    "bg-green-100 text-green-800";
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">

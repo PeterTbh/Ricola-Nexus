@@ -7,13 +7,15 @@ import {
 import * as XLSX from "xlsx";
 import { db } from "../firebase";
 import Layout from "../components/Layout";
+import InventoryManagement from "./InventoryManagement";
+import MRPImportManagement from "./MRPImportManagement";
 import {
   Users, CheckCircle, BarChart3, Package,
   Loader2, UserCheck, UserX,
   AlertCircle, Shield, Activity, Download,
   Trash2, X, Archive, History, BarChart2, Table,
   ChevronRight, Info, Plus, Pencil, Save, MessageSquare,
-  Upload, HelpCircle
+  Upload, HelpCircle, Layers, FileSpreadsheet
 } from "lucide-react";
 
 const MONTHS = [
@@ -350,6 +352,7 @@ function ArchivedRecordsModal({ onClose }) {
 function ProductInfoModal({ product, onClose }) {
   const [productId, setProductId] = useState(product.productId || "");
   const [notes, setNotes] = useState(product.notes || "");
+  const [type, setType] = useState(product.type || "HF");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -358,6 +361,7 @@ function ProductInfoModal({ product, onClose }) {
     await updateDoc(doc(db, "products", product.id), {
       productId: productId.trim(),
       notes: notes.trim(),
+      type,
     });
     setSaving(false);
     setSaved(true);
@@ -378,6 +382,19 @@ function ProductInfoModal({ product, onClose }) {
         </div>
 
         <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+              Type
+            </label>
+            <select
+              value={type}
+              onChange={e => setType(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm bg-white"
+            >
+              <option value="HF">HF — Halbfabrikat (semi-finished)</option>
+              <option value="FG">FG — Finished Good</option>
+            </select>
+          </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
               Product-ID
@@ -586,6 +603,7 @@ function FormatInfoModal({ onClose }) {
             { col: "Column A", name: "Name", required: true, desc: 'The product display name. Also accepted: "Product Name".' },
             { col: "Column B", name: "Product ID", required: false, desc: 'A short identifier such as a SKU. Also accepted: "ID", "Product-ID".' },
             { col: "Column C", name: "Notes", required: false, desc: 'Free-text notes about the product. Also accepted: "Note".' },
+            { col: "Column D", name: "Type", required: false, desc: '"HF" (Halbfabrikat / semi-finished) or "FG" (Finished Good). Defaults to "HF" if omitted.' },
           ].map(({ col, name, required, desc }) => (
             <div key={col} className="flex gap-3">
               <div className="w-20 text-xs font-semibold text-gray-500 shrink-0 pt-0.5">{col}</div>
@@ -613,18 +631,20 @@ function FormatInfoModal({ onClose }) {
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Name</th>
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Product ID</th>
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Notes</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Type</th>
                 </tr>
               </thead>
               <tbody>
                 {[
-                  ["Classic Herb Drops", "SKU-001", "Flagship product"],
-                  ["Honey & Herb Drops", "SKU-002", ""],
-                  ["Sugar Free Drops", "", ""],
+                  ["Classic Herb Drops", "SKU-001", "Flagship product", "HF"],
+                  ["Honey & Herb Drops", "SKU-002", "", "HF"],
+                  ["Sugar Free Drops", "", "", "FG"],
                 ].map((row, i) => (
                   <tr key={i} className="border-b border-gray-50 last:border-0">
                     <td className="px-3 py-2 text-gray-700">{row[0]}</td>
                     <td className="px-3 py-2 text-gray-600">{row[1] || <span className="text-gray-300 italic">empty</span>}</td>
                     <td className="px-3 py-2 text-gray-600">{row[2] || <span className="text-gray-300 italic">empty</span>}</td>
+                    <td className="px-3 py-2 text-gray-600">{row[3]}</td>
                   </tr>
                 ))}
               </tbody>
@@ -679,9 +699,10 @@ function UploadProductsModal({ onClose }) {
         }
 
         const header = rows[0].map(h => String(h).toLowerCase().trim());
-        const nameIdx = header.findIndex(h => ["name", "product name"].includes(h));
-        const idIdx   = header.findIndex(h => ["product id", "id", "product-id"].includes(h));
+        const nameIdx  = header.findIndex(h => ["name", "product name"].includes(h));
+        const idIdx    = header.findIndex(h => ["product id", "id", "product-id"].includes(h));
         const notesIdx = header.findIndex(h => ["notes", "note"].includes(h));
+        const typeIdx  = header.findIndex(h => ["type"].includes(h));
 
         if (nameIdx === -1) {
           setParseError('Could not find a "Name" column. Please check the format and try again.');
@@ -690,13 +711,17 @@ function UploadProductsModal({ onClose }) {
 
         const products = rows.slice(1)
           .filter(row => String(row[nameIdx] ?? "").trim())
-          .map((row, i) => ({
-            _id: `p_${i}`,
-            name: String(row[nameIdx] ?? "").trim(),
-            productId: idIdx >= 0 ? String(row[idIdx] ?? "").trim() : "",
-            notes: notesIdx >= 0 ? String(row[notesIdx] ?? "").trim() : "",
-            included: true,
-          }));
+          .map((row, i) => {
+            const rawType = typeIdx >= 0 ? String(row[typeIdx] ?? "").trim().toUpperCase() : "";
+            return {
+              _id: `p_${i}`,
+              name: String(row[nameIdx] ?? "").trim(),
+              productId: idIdx >= 0 ? String(row[idIdx] ?? "").trim() : "",
+              notes: notesIdx >= 0 ? String(row[notesIdx] ?? "").trim() : "",
+              type: rawType === "FG" ? "FG" : "HF",
+              included: true,
+            };
+          });
 
         if (products.length === 0) {
           setParseError("No valid product rows found. Make sure each row has a non-empty Name.");
@@ -756,6 +781,7 @@ function UploadProductsModal({ onClose }) {
           name:      p.name.trim(),
           productId: p.productId.trim(),
           notes:     p.notes.trim(),
+          type:      p.type || "HF",
           key:       `product${maxNum}Tons`,
           order:     maxOrder,
           createdAt: serverTimestamp(),
@@ -849,6 +875,7 @@ function UploadProductsModal({ onClose }) {
                         </th>
                         <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Product ID</th>
                         <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</th>
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -888,6 +915,16 @@ function UploadProductsModal({ onClose }) {
                               placeholder="Notes…"
                               className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-[#4A9E4A] focus:border-transparent"
                             />
+                          </td>
+                          <td className="px-3 py-2">
+                            <select
+                              value={p.type || "HF"}
+                              onChange={e => updateProduct(p._id, "type", e.target.value)}
+                              className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-[#4A9E4A] bg-white"
+                            >
+                              <option value="HF">HF</option>
+                              <option value="FG">FG</option>
+                            </select>
                           </td>
                         </tr>
                       ))}
@@ -952,10 +989,12 @@ function ProductManagement() {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [addingNew, setAddingNew] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState("HF");
   const [saving, setSaving] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [showFormatInfo, setShowFormatInfo] = useState(false);
   const seedingRef = useRef(false);
+  const migratingRef = useRef(false);
 
   useEffect(() => {
     const q = query(collection(db, "products"), orderBy("order"));
@@ -963,15 +1002,26 @@ function ProductManagement() {
       if (snap.empty && !seedingRef.current) {
         seedingRef.current = true;
         const defaults = [
-          { name: "Product 1", productId: "", notes: "", key: "product1Tons", order: 0 },
-          { name: "Product 2", productId: "", notes: "", key: "product2Tons", order: 1 },
-          { name: "Product 3", productId: "", notes: "", key: "product3Tons", order: 2 },
+          { name: "Product 1", productId: "", notes: "", key: "product1Tons", order: 0, type: "HF" },
+          { name: "Product 2", productId: "", notes: "", key: "product2Tons", order: 1, type: "HF" },
+          { name: "Product 3", productId: "", notes: "", key: "product3Tons", order: 2, type: "HF" },
         ];
         for (const p of defaults) {
           await addDoc(collection(db, "products"), { ...p, createdAt: serverTimestamp() });
         }
       } else if (!snap.empty) {
-        setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
+        const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // One-time migration: set type="HF" on any product missing the field
+        if (!migratingRef.current) {
+          const needsMigration = all.filter(p => !p.type);
+          if (needsMigration.length > 0) {
+            migratingRef.current = true;
+            for (const p of needsMigration) {
+              await updateDoc(doc(db, "products", p.id), { type: "HF" });
+            }
+          }
+        }
+        setProducts(all.filter(p => !p.archived));
         setLoading(false);
       }
     }, () => setLoading(false));
@@ -996,6 +1046,7 @@ function ProductManagement() {
       name: newName.trim(),
       productId: "",
       notes: "",
+      type: newType,
       key: `product${nextNum}Tons`,
       order: maxOrder + 1,
       createdAt: serverTimestamp(),
@@ -1003,6 +1054,7 @@ function ProductManagement() {
     setSaving(false);
     setAddingNew(false);
     setNewName("");
+    setNewType("HF");
   };
 
   return (
@@ -1082,6 +1134,9 @@ function ProductManagement() {
             ) : (
               <>
                 <span className="flex-1 text-sm font-medium text-gray-800">{product.name}</span>
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold shrink-0 ${
+                  product.type === "FG" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"
+                }`}>{product.type || "HF"}</span>
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => setInfoTarget(product)}
@@ -1114,11 +1169,19 @@ function ProductManagement() {
               type="text"
               value={newName}
               onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") handleAddProduct(); if (e.key === "Escape") { setAddingNew(false); setNewName(""); } }}
+              onKeyDown={e => { if (e.key === "Enter") handleAddProduct(); if (e.key === "Escape") { setAddingNew(false); setNewName(""); setNewType("HF"); } }}
               placeholder="New product name..."
               autoFocus
               className="flex-1 px-3 py-1.5 text-sm rounded-lg border border-[#4A9E4A] focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]"
             />
+            <select
+              value={newType}
+              onChange={e => setNewType(e.target.value)}
+              className="px-2 py-1.5 text-xs rounded-lg border border-[#4A9E4A] focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] bg-white text-gray-700"
+            >
+              <option value="HF">HF</option>
+              <option value="FG">FG</option>
+            </select>
             <button
               onClick={handleAddProduct}
               disabled={saving || !newName.trim()}
@@ -1128,7 +1191,7 @@ function ProductManagement() {
               Add
             </button>
             <button
-              onClick={() => { setAddingNew(false); setNewName(""); }}
+              onClick={() => { setAddingNew(false); setNewName(""); setNewType("HF"); }}
               className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600"
             >
               <X className="w-3.5 h-3.5" />
@@ -1394,6 +1457,7 @@ function PendingApprovals({ onApprove }) {
   const [pendingUsers, setPendingUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [functionInputs, setFunctionInputs] = useState({});
+  const [roleInputs, setRoleInputs] = useState({});
   const [actionLoading, setActionLoading] = useState({});
   const [errors, setErrors] = useState({});
 
@@ -1415,8 +1479,9 @@ function PendingApprovals({ onApprove }) {
     setErrors(prev => ({ ...prev, [user.id]: "" }));
     setActionLoading(prev => ({ ...prev, [user.id]: "approving" }));
     try {
+      const assignedRole = roleInputs[user.id] || "country_head";
       await updateDoc(doc(db, "users", user.id), {
-        role: "country_head",
+        role: assignedRole,
         isApproved: true,
         customFunction: fn,
       });
@@ -1474,25 +1539,40 @@ function PendingApprovals({ onApprove }) {
           </div>
 
           <div className="mt-4 flex flex-col sm:flex-row gap-3 items-start sm:items-end">
-            <div className="flex-1">
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                Assign Function / Role Title
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. European Market Lead"
-                value={functionInputs[user.id] || ""}
-                onChange={e => {
-                  setFunctionInputs(prev => ({ ...prev, [user.id]: e.target.value }));
-                  setErrors(prev => ({ ...prev, [user.id]: "" }));
-                }}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent"
-              />
-              {errors[user.id] && (
-                <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" /> {errors[user.id]}
-                </p>
-              )}
+            <div className="flex-1 flex flex-col sm:flex-row gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Assign Role
+                </label>
+                <select
+                  value={roleInputs[user.id] || "country_head"}
+                  onChange={e => setRoleInputs(prev => ({ ...prev, [user.id]: e.target.value }))}
+                  className="px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent bg-white text-gray-700"
+                >
+                  <option value="country_head">Country Head</option>
+                  <option value="hf_planner">HF Planner</option>
+                </select>
+              </div>
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Assign Function / Role Title
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. European Market Lead"
+                  value={functionInputs[user.id] || ""}
+                  onChange={e => {
+                    setFunctionInputs(prev => ({ ...prev, [user.id]: e.target.value }));
+                    setErrors(prev => ({ ...prev, [user.id]: "" }));
+                  }}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent"
+                />
+                {errors[user.id] && (
+                  <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" /> {errors[user.id]}
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="flex gap-2">
@@ -1580,11 +1660,13 @@ function ActiveAccounts() {
                 <td className="px-4 py-3 text-gray-600">{acc.customFunction || <span className="text-gray-300 italic">—</span>}</td>
                 <td className="px-4 py-3">
                   <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
-                    acc.role === "admin"
-                      ? "bg-yellow-100 text-yellow-800"
-                      : "bg-green-100 text-green-800"
+                    acc.role === "admin" ? "bg-yellow-100 text-yellow-800" :
+                    acc.role === "hf_planner" ? "bg-blue-100 text-blue-800" :
+                    "bg-green-100 text-green-800"
                   }`}>
-                    {acc.role === "admin" ? "Administrator" : "Country Head"}
+                    {acc.role === "admin" ? "Administrator" :
+                     acc.role === "hf_planner" ? "HF Planner" :
+                     "Country Head"}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right">
@@ -1967,6 +2049,8 @@ export default function AdminDashboard() {
     { id: "active", label: "Active Accounts", icon: Shield },
     { id: "demand", label: "Demand Overview", icon: BarChart3 },
     { id: "products", label: "Products", icon: Package },
+    { id: "inventory", label: "Inventory", icon: Layers },
+    { id: "mrp", label: "MRP Imports", icon: FileSpreadsheet },
   ];
 
   return (
@@ -2025,6 +2109,8 @@ export default function AdminDashboard() {
           {activeSection === "active" && <ActiveAccounts />}
           {activeSection === "demand" && <DemandOverview />}
           {activeSection === "products" && <ProductManagement />}
+          {activeSection === "inventory" && <InventoryManagement />}
+          {activeSection === "mrp" && <MRPImportManagement />}
         </div>
       </div>
     </Layout>
