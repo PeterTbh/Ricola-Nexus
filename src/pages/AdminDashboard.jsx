@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import {
   collection, query, where, doc, updateDoc,
   deleteDoc, onSnapshot, orderBy, getDocs, serverTimestamp,
-  addDoc
+  addDoc, writeBatch
 } from "firebase/firestore";
+import { useAuth } from "../contexts/AuthContext";
 import * as XLSX from "xlsx";
 import { db } from "../firebase";
 import Layout from "../components/Layout";
@@ -15,7 +16,8 @@ import {
   AlertCircle, Shield, Activity, Download,
   Trash2, X, Archive, History, BarChart2, Table,
   ChevronRight, Info, Plus, Pencil, Save, MessageSquare,
-  Upload, HelpCircle, Layers, FileSpreadsheet
+  Upload, HelpCircle, Layers, FileSpreadsheet, AlertTriangle, Send, CheckCircle2,
+  ShoppingCart, Truck, ChevronDown, Bell
 } from "lucide-react";
 
 const MONTHS = [
@@ -353,15 +355,24 @@ function ProductInfoModal({ product, onClose }) {
   const [productId, setProductId] = useState(product.productId || "");
   const [notes, setNotes] = useState(product.notes || "");
   const [type, setType] = useState(product.type || "HF");
+  const [shelfLifeMonths, setShelfLifeMonths] = useState(product.shelfLifeMonths != null ? String(product.shelfLifeMonths) : "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [shelfError, setShelfError] = useState("");
 
   const handleSave = async () => {
+    const slm = shelfLifeMonths !== "" ? parseFloat(shelfLifeMonths) : null;
+    if (slm === null || isNaN(slm) || slm <= 0) {
+      setShelfError("Shelf life is required and must be a positive number.");
+      return;
+    }
+    setShelfError("");
     setSaving(true);
     await updateDoc(doc(db, "products", product.id), {
       productId: productId.trim(),
       notes: notes.trim(),
       type,
+      shelfLifeMonths: slm,
     });
     setSaving(false);
     setSaved(true);
@@ -384,15 +395,15 @@ function ProductInfoModal({ product, onClose }) {
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
-              Type
+              Delivery Type
             </label>
             <select
               value={type}
               onChange={e => setType(e.target.value)}
               className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm bg-white"
             >
-              <option value="HF">HF — Halbfabrikat (semi-finished)</option>
-              <option value="FG">FG — Finished Good</option>
+              <option value="HF">HF — Halbfabrikat (internal)</option>
+              <option value="FG">FG — Finished Good (external)</option>
             </select>
           </div>
           <div>
@@ -409,13 +420,28 @@ function ProductInfoModal({ product, onClose }) {
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+              Shelf Life (months) <span className="text-red-500 ml-0.5">*</span>
+            </label>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={shelfLifeMonths}
+              onChange={e => { setShelfLifeMonths(e.target.value); setShelfError(""); }}
+              placeholder="e.g. 24"
+              className={`w-full px-3 py-2.5 rounded-xl border text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${shelfError ? "border-red-400 bg-red-50" : "border-gray-200"}`}
+            />
+            {shelfError && <p className="text-xs text-red-600 mt-1">{shelfError}</p>}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
               Notes
             </label>
             <textarea
               value={notes}
               onChange={e => setNotes(e.target.value)}
               placeholder="Additional notes about this product..."
-              rows={4}
+              rows={3}
               className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm resize-none"
             />
           </div>
@@ -1458,6 +1484,10 @@ function PendingApprovals({ onApprove }) {
   const [loading, setLoading] = useState(true);
   const [functionInputs, setFunctionInputs] = useState({});
   const [roleInputs, setRoleInputs] = useState({});
+  const [countryInputs, setCountryInputs] = useState({});  // free-text for "new" mode
+  const [countryModes, setCountryModes] = useState({});    // "existing" | "new" per user
+  const [countrySelects, setCountrySelects] = useState({}); // selected known country per user
+  const [knownCountries, setKnownCountries] = useState([]);
   const [actionLoading, setActionLoading] = useState({});
   const [errors, setErrors] = useState({});
 
@@ -1470,6 +1500,17 @@ function PendingApprovals({ onApprove }) {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    Promise.all([
+      getDocs(query(collection(db, "users"), where("isApproved", "==", true))),
+      getDocs(collection(db, "mrpImports")),
+    ]).then(([usersSnap, mrpSnap]) => {
+      const fromUsers = usersSnap.docs.map(d => d.data().country).filter(Boolean);
+      const fromMrp = mrpSnap.docs.flatMap(d => (d.data().rows || []).map(r => r.country).filter(Boolean));
+      setKnownCountries([...new Set([...fromUsers, ...fromMrp])].sort());
+    });
+  }, []);
+
   const handleApprove = async (user) => {
     const fn = (functionInputs[user.id] || "").trim();
     if (!fn) {
@@ -1478,12 +1519,17 @@ function PendingApprovals({ onApprove }) {
     }
     setErrors(prev => ({ ...prev, [user.id]: "" }));
     setActionLoading(prev => ({ ...prev, [user.id]: "approving" }));
+    const mode = countryModes[user.id] || (knownCountries.length > 0 ? "existing" : "new");
+    const country = mode === "existing"
+      ? (countrySelects[user.id] || knownCountries[0] || "")
+      : (countryInputs[user.id] || "").trim();
     try {
       const assignedRole = roleInputs[user.id] || "country_head";
       await updateDoc(doc(db, "users", user.id), {
         role: assignedRole,
         isApproved: true,
         customFunction: fn,
+        country,
       });
       onApprove?.();
     } finally {
@@ -1573,6 +1619,52 @@ function PendingApprovals({ onApprove }) {
                   </p>
                 )}
               </div>
+              <div className="min-w-[180px]">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Country
+                </label>
+                {(() => {
+                  const mode = countryModes[user.id] || (knownCountries.length > 0 ? "existing" : "new");
+                  return (
+                    <div className="space-y-1.5">
+                      <div className="flex gap-0.5 p-0.5 bg-gray-100 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setCountryModes(prev => ({ ...prev, [user.id]: "existing" }))}
+                          disabled={knownCountries.length === 0}
+                          className={`flex-1 px-2 py-1 rounded-md text-xs font-medium transition-colors disabled:opacity-40 ${mode === "existing" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                        >
+                          Existing
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCountryModes(prev => ({ ...prev, [user.id]: "new" }))}
+                          className={`flex-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${mode === "new" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                        >
+                          New
+                        </button>
+                      </div>
+                      {mode === "existing" ? (
+                        <select
+                          value={countrySelects[user.id] || knownCountries[0] || ""}
+                          onChange={e => setCountrySelects(prev => ({ ...prev, [user.id]: e.target.value }))}
+                          className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] bg-white"
+                        >
+                          {knownCountries.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          placeholder="e.g. Germany"
+                          value={countryInputs[user.id] || ""}
+                          onChange={e => setCountryInputs(prev => ({ ...prev, [user.id]: e.target.value }))}
+                          className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]"
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
 
             <div className="flex gap-2">
@@ -1604,12 +1696,137 @@ function PendingApprovals({ onApprove }) {
   );
 }
 
+// ─── Change Country Modal (shared by admin and country heads) ─────────────────
+function ChangeCountryModal({ userId, currentCountry, displayName, onClose, onSaved }) {
+  const [knownCountries, setKnownCountries] = useState([]);
+  const [loadingCountries, setLoadingCountries] = useState(true);
+  const [mode, setMode] = useState("existing");
+  const [selectedCountry, setSelectedCountry] = useState("");
+  const [newCountry, setNewCountry] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    Promise.all([
+      getDocs(collection(db, "mrpImports")),
+      getDocs(query(collection(db, "users"), where("isApproved", "==", true))),
+    ]).then(([mrpSnap, usersSnap]) => {
+      const fromMrp = mrpSnap.docs.flatMap(d => (d.data().rows || []).map(r => r.country).filter(Boolean));
+      const fromUsers = usersSnap.docs.map(d => d.data().country).filter(Boolean);
+      const unique = [...new Set([...fromMrp, ...fromUsers])].sort();
+      setKnownCountries(unique);
+      if (unique.length === 0) {
+        setMode("new");
+      } else if (currentCountry && unique.includes(currentCountry)) {
+        setSelectedCountry(currentCountry);
+        setMode("existing");
+      } else {
+        setSelectedCountry(unique[0]);
+        setMode("existing");
+      }
+      setLoadingCountries(false);
+    }).catch(() => { setMode("new"); setLoadingCountries(false); });
+  }, [currentCountry]);
+
+  const handleSave = async () => {
+    const value = mode === "existing" ? selectedCountry : newCountry.trim();
+    if (!value) { setError("Please enter a country."); return; }
+    setSaving(true); setError("");
+    try {
+      await updateDoc(doc(db, "users", userId), { country: value });
+      onSaved(value);
+      onClose();
+    } catch {
+      setError("Failed to update. Please try again.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h3 className="font-bold text-gray-900 text-sm">Set Country</h3>
+            {displayName && <p className="text-xs text-gray-400 mt-0.5">{displayName}</p>}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+
+        {loadingCountries ? (
+          <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-[#4A9E4A]" /></div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex gap-1 p-1 bg-gray-100 rounded-xl">
+              <button
+                onClick={() => setMode("existing")}
+                disabled={knownCountries.length === 0}
+                className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-40 ${mode === "existing" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+              >
+                Existing country
+              </button>
+              <button
+                onClick={() => setMode("new")}
+                className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${mode === "new" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+              >
+                New country
+              </button>
+            </div>
+
+            {mode === "existing" ? (
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Select country</label>
+                <select
+                  value={selectedCountry}
+                  onChange={e => setSelectedCountry(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]"
+                >
+                  {knownCountries.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <p className="text-xs text-gray-400 mt-1.5">Countries from MRP imports and existing accounts.</p>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Country name</label>
+                <input
+                  type="text"
+                  value={newCountry}
+                  onChange={e => { setNewCountry(e.target.value); setError(""); }}
+                  placeholder="e.g. Germany"
+                  autoFocus
+                  className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]"
+                />
+                <p className="text-xs text-gray-400 mt-1.5">Must match exactly the value in MRP imports for discrepancy detection to work.</p>
+              </div>
+            )}
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={onClose} disabled={saving} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-60">Cancel</button>
+              <button
+                onClick={handleSave}
+                disabled={saving || (mode === "existing" && !selectedCountry) || (mode === "new" && !newCountry.trim())}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-60 transition-colors"
+              >
+                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Section: Active Accounts ──────────────────────────────────────────────────
 function ActiveAccounts() {
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [countryEditTarget, setCountryEditTarget] = useState(null);
 
   useEffect(() => {
     const q = query(collection(db, "users"), where("isApproved", "==", true));
@@ -1639,13 +1856,14 @@ function ActiveAccounts() {
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">User</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Email</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Function</th>
+              <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Country</th>
               <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Role</th>
               <th className="px-4 py-3" />
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {accounts.map(acc => (
-              <tr key={acc.id} className="hover:bg-gray-50 transition-colors">
+              <tr key={acc.id} className="group hover:bg-gray-50 transition-colors">
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded-full bg-[#2D6A2D] flex items-center justify-center shrink-0">
@@ -1658,6 +1876,20 @@ function ActiveAccounts() {
                 </td>
                 <td className="px-4 py-3 text-gray-500">{acc.email}</td>
                 <td className="px-4 py-3 text-gray-600">{acc.customFunction || <span className="text-gray-300 italic">—</span>}</td>
+                <td className="px-4 py-3 text-gray-600">
+                  <div className="flex items-center gap-1.5">
+                    <span>{acc.country || <span className="text-gray-300 italic">—</span>}</span>
+                    {acc.role !== "admin" && (
+                      <button
+                        onClick={() => setCountryEditTarget(acc)}
+                        title="Edit country"
+                        className="p-0.5 rounded text-gray-300 hover:text-[#2D6A2D] opacity-0 group-hover:opacity-100 transition-all"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                </td>
                 <td className="px-4 py-3">
                   <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
                     acc.role === "admin" ? "bg-yellow-100 text-yellow-800" :
@@ -1702,6 +1934,16 @@ function ActiveAccounts() {
           account={deleteTarget}
           onClose={() => setDeleteTarget(null)}
           onDeleted={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {countryEditTarget && (
+        <ChangeCountryModal
+          userId={countryEditTarget.id}
+          currentCountry={countryEditTarget.country}
+          displayName={countryEditTarget.username}
+          onClose={() => setCountryEditTarget(null)}
+          onSaved={() => setCountryEditTarget(null)}
         />
       )}
 
@@ -1790,8 +2032,26 @@ function DemandOverview() {
   const [products, setProducts] = useState([]);
   const [productsLoaded, setProductsLoaded] = useState(false);
 
+  const [activeMrp, setActiveMrp] = useState(null);
+  const [usersMap, setUsersMap] = useState({});
+
   const [countryHistoryTarget, setCountryHistoryTarget] = useState(null);
   const [productHistoryTarget, setProductHistoryTarget] = useState(null);
+  const [messages, setMessages] = useState([]);
+
+  useEffect(() => {
+    return onSnapshot(collection(db, "messages"), snap => {
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, []);
+
+  useEffect(() => {
+    getDocs(query(collection(db, "users"), where("isApproved", "==", true))).then(snap => {
+      const map = {};
+      snap.docs.forEach(d => { map[d.id] = d.data(); });
+      setUsersMap(map);
+    });
+  }, []);
 
   useEffect(() => {
     const q = query(collection(db, "products"), orderBy("order"));
@@ -1824,12 +2084,57 @@ function DemandOverview() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    const q = query(collection(db, "mrpImports"), where("isActive", "==", true));
+    const unsub = onSnapshot(q, (snap) => {
+      setActiveMrp(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
+    });
+    return unsub;
+  }, []);
+
+  // Returns array of { productKey, mrpQty, demandQty } discrepancies for a given demand doc
+  const getDemandDiscrepancies = (demand) => {
+    if (!activeMrp?.rows) return [];
+    // Fall back to current user profile country when demand was submitted before country field existed
+    const effectiveCountry = (demand.country?.trim() || usersMap[demand.userId]?.country?.trim() || "").toLowerCase();
+    if (!effectiveCountry) return [];
+    const dMonth = (demand.month || "").trim().toLowerCase();
+    const out = [];
+    for (const row of activeMrp.rows) {
+      if (!row.country) continue;
+      if (row.period.trim().toLowerCase() !== dMonth) continue;
+      if (row.country.trim().toLowerCase() !== effectiveCountry) continue;
+      const demandQty = Number(demand[row.productKey]);
+      const mrpQty = typeof row.suggestedQty === "number" ? row.suggestedQty : parseFloat(row.suggestedQty) || 0;
+      if (!isNaN(demandQty) && Math.abs(demandQty - mrpQty) > 0.001) {
+        out.push({ productKey: row.productKey, mrpQty, demandQty });
+      }
+    }
+    return out;
+  };
+
+  const getResolution = (userId, productKey, period) => {
+    return messages.find(m =>
+      m.toUserId === userId &&
+      m.productKey === productKey &&
+      (m.period || "").trim().toLowerCase() === (period || "").trim().toLowerCase() &&
+      (m.status === "resolved" || m.status === "admin_resolved")
+    );
+  };
+
   const activeDemands = demands.filter(d => !d.archived);
   const filtered = activeDemands.filter(d => d.month === selectedMonth);
 
+  // Use resolvedQty when a discrepancy was resolved (either party chose MRP or demand value)
+  const getEffectiveQty = (demand, productKey) => {
+    const res = getResolution(demand.userId, productKey, demand.month);
+    if (res?.resolvedQty != null) return res.resolvedQty;
+    return Number(demand[productKey]) || 0;
+  };
+
   const aggregated = {};
   products.forEach(p => {
-    aggregated[p.key] = filtered.reduce((s, d) => s + (Number(d[p.key]) || 0), 0);
+    aggregated[p.key] = filtered.reduce((s, d) => s + getEffectiveQty(d, p.key), 0);
   });
 
   if (loading || !productsLoaded) return (
@@ -1949,13 +2254,15 @@ function DemandOverview() {
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {filtered.map(d => {
-                        const total = products.reduce((s, p) => s + (Number(d[p.key]) || 0), 0);
+                        const total = products.reduce((s, p) => s + getEffectiveQty(d, p.key), 0);
                         const submittedAt = d.submittedAt?.toDate?.();
+                        const discrepancies = getDemandDiscrepancies(d);
+                        const hasDiscrepancy = discrepancies.length > 0;
                         return (
                           <tr
                             key={d.id}
                             onClick={() => setCountryHistoryTarget({ userId: d.userId, username: d.username })}
-                            className="hover:bg-green-50 transition-colors cursor-pointer group"
+                            className={`hover:bg-green-50 transition-colors cursor-pointer group ${hasDiscrepancy ? "bg-yellow-50/60" : ""}`}
                           >
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-2">
@@ -1965,12 +2272,33 @@ function DemandOverview() {
                                   </span>
                                 </div>
                                 <span className="font-medium text-gray-800 group-hover:text-[#2D6A2D]">{d.username}</span>
+                                {d.country && <span className="text-xs text-gray-400">({d.country})</span>}
+                                {hasDiscrepancy && (
+                                  <span title={`${discrepancies.length} MRP discrepanc${discrepancies.length === 1 ? "y" : "ies"}`}>
+                                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                  </span>
+                                )}
                                 <ChevronRight className="w-3.5 h-3.5 text-gray-300 group-hover:text-[#2D6A2D] transition-colors" />
                               </div>
                             </td>
-                            {products.map(p => (
-                              <td key={p.key} className="px-4 py-3 text-right text-gray-700 tabular-nums">{Number(d[p.key] || 0).toFixed(2)}</td>
-                            ))}
+                            {products.map(p => {
+                              const disc = discrepancies.find(x => x.productKey === p.key);
+                              const resolution = getResolution(d.userId, p.key, d.month);
+                              return (
+                                <td key={p.key} className="px-4 py-3 text-right text-gray-700 tabular-nums">
+                                  {resolution?.resolvedQty != null ? (
+                                    <span className="text-green-600 font-semibold">{resolution.resolvedQty.toFixed(2)}</span>
+                                  ) : (
+                                    <span>{Number(d[p.key] || 0).toFixed(2)}</span>
+                                  )}
+                                  {disc && !resolution && (
+                                    <span className="ml-1 text-xs text-amber-600" title={`MRP: ${disc.mrpQty.toFixed(2)}t`}>
+                                      / {disc.mrpQty.toFixed(2)}
+                                    </span>
+                                  )}
+                                </td>
+                              );
+                            })}
                             <td className="px-4 py-3 text-right font-semibold text-[#2D6A2D] tabular-nums">{total.toFixed(2)}</td>
                             <td className="px-4 py-3 text-xs text-gray-400">
                               {submittedAt ? submittedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"}
@@ -2033,15 +2361,1416 @@ function DemandOverview() {
   );
 }
 
+// ─── Message Country Head Modal ────────────────────────────────────────────────
+function MessageCountryHeadModal({ discrepancy, onClose }) {
+  const { currentUser, userProfile } = useAuth();
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  const handleSend = async () => {
+    if (!note.trim()) return;
+    setSending(true);
+    try {
+      await addDoc(collection(db, "messages"), {
+        fromUserId: currentUser.uid,
+        fromUsername: userProfile?.username || "Admin",
+        toUserId: discrepancy.demandUserId,
+        toUserCountry: discrepancy.country,
+        productKey: discrepancy.productKey,
+        period: discrepancy.period,
+        adminNote: note.trim(),
+        mrpQty: discrepancy.mrpQty,
+        demandQty: discrepancy.demandQty,
+        status: "pending",
+        countryHeadResponse: "",
+        resolvedAt: null,
+        createdAt: serverTimestamp(),
+      });
+      setSent(true);
+      setTimeout(() => { setSent(false); onClose(); }, 1200);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h3 className="font-bold text-gray-900">Message Country Head</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{discrepancy.country} · {discrepancy.productKey} · {discrepancy.period}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="mb-4 p-3 bg-amber-50 rounded-xl border border-amber-100 text-xs space-y-1">
+          <div className="flex justify-between">
+            <span className="text-gray-500">Demand submitted:</span>
+            <span className="font-semibold text-gray-800">{discrepancy.demandQty?.toFixed(2)} t</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">MRP suggested:</span>
+            <span className="font-semibold text-amber-700">{discrepancy.mrpQty?.toFixed(2)} t</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Difference:</span>
+            <span className="font-semibold text-red-600">{(discrepancy.demandQty - discrepancy.mrpQty).toFixed(2)} t</span>
+          </div>
+        </div>
+        <div className="mb-4">
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Your note</label>
+          <textarea
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            placeholder="Explain the discrepancy or ask the country head to review..."
+            rows={4}
+            className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
+          />
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50">Cancel</button>
+          <button
+            onClick={handleSend}
+            disabled={sending || !note.trim() || sent}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
+          >
+            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : sent ? <CheckCircle2 className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+            {sent ? "Sent!" : "Send Message"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Admin Resolve Modal ──────────────────────────────────────────────────────
+function AdminResolveModal({ discrepancy, onClose }) {
+  const { currentUser, userProfile } = useAuth();
+  const [choice, setChoice] = useState("demand"); // "demand" | "mrp"
+  const [saving, setSaving] = useState(false);
+
+  const resolvedQty = choice === "demand" ? discrepancy.demandQty : discrepancy.mrpQty;
+
+  const handleResolve = async () => {
+    setSaving(true);
+    try {
+      const baseData = {
+        adminChoice: choice,
+        resolvedQty,
+        status: "admin_resolved",
+        resolvedAt: serverTimestamp(),
+      };
+      if (discrepancy.message) {
+        await updateDoc(doc(db, "messages", discrepancy.message.id), baseData);
+      } else {
+        await addDoc(collection(db, "messages"), {
+          fromUserId: currentUser.uid,
+          fromUsername: userProfile?.username || "Admin",
+          toUserId: discrepancy.demandUserId,
+          toUserCountry: discrepancy.country,
+          productKey: discrepancy.productKey,
+          period: discrepancy.period,
+          adminNote: `Admin resolved directly. Chosen value: ${resolvedQty.toFixed(2)} t.`,
+          mrpQty: discrepancy.mrpQty,
+          demandQty: discrepancy.demandQty,
+          countryHeadResponse: "",
+          createdAt: serverTimestamp(),
+          ...baseData,
+        });
+      }
+      onClose();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h3 className="font-bold text-gray-900">Resolve Discrepancy</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{discrepancy.country} · {discrepancy.productKey} · {discrepancy.period}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="mb-4 p-3 bg-amber-50 rounded-xl border border-amber-100 text-xs space-y-1">
+          <div className="flex justify-between">
+            <span className="text-gray-500">Demand submitted:</span>
+            <span className="font-semibold text-gray-800">{discrepancy.demandQty?.toFixed(2)} t</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">MRP suggested:</span>
+            <span className="font-semibold text-amber-700">{discrepancy.mrpQty?.toFixed(2)} t</span>
+          </div>
+        </div>
+        <p className="text-sm font-semibold text-gray-700 mb-3">Which value should be used?</p>
+        <div className="space-y-2 mb-5">
+          <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${choice === "demand" ? "border-[#2D6A2D] bg-green-50" : "border-gray-200 hover:border-gray-300"}`}>
+            <input type="radio" name="resolveChoice" value="demand" checked={choice === "demand"} onChange={() => setChoice("demand")} className="mt-0.5 accent-[#2D6A2D]" />
+            <div>
+              <p className="font-semibold text-sm text-gray-800">Use manual demand value</p>
+              <p className="text-xs text-gray-500 mt-0.5">{discrepancy.demandQty?.toFixed(2)} t (submitted by {discrepancy.demandUsername})</p>
+            </div>
+          </label>
+          <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${choice === "mrp" ? "border-amber-400 bg-amber-50" : "border-gray-200 hover:border-gray-300"}`}>
+            <input type="radio" name="resolveChoice" value="mrp" checked={choice === "mrp"} onChange={() => setChoice("mrp")} className="mt-0.5 accent-amber-600" />
+            <div>
+              <p className="font-semibold text-sm text-gray-800">Use MRP expected value</p>
+              <p className="text-xs text-gray-500 mt-0.5">{discrepancy.mrpQty?.toFixed(2)} t (from active MRP import)</p>
+            </div>
+          </label>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} disabled={saving} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-60">Cancel</button>
+          <button
+            onClick={handleResolve}
+            disabled={saving}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
+          >
+            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+            {saving ? "Resolving…" : `Use ${resolvedQty.toFixed(2)} t`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Inventory Discrepancy Modals ─────────────────────────────────────────────
+function InventoryMessageModal({ discrepancy, onClose }) {
+  const { currentUser, userProfile } = useAuth();
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  const handleSend = async () => {
+    if (!note.trim()) return;
+    setSending(true);
+    try {
+      await addDoc(collection(db, "messages"), {
+        type: "inventory_discrepancy",
+        fromUserId: currentUser.uid,
+        fromUsername: userProfile?.username || "Admin",
+        toUserId: discrepancy.demandUserId,
+        toUserCountry: discrepancy.country,
+        productKey: discrepancy.productKey,
+        period: discrepancy.period,
+        adminNote: note.trim(),
+        mrpInventoryQty: discrepancy.mrpInventoryQty,
+        demandInventoryQty: discrepancy.demandInventoryQty,
+        status: "pending",
+        countryHeadResponse: "",
+        resolvedAt: null,
+        createdAt: serverTimestamp(),
+      });
+      setSent(true);
+      setTimeout(() => { setSent(false); onClose(); }, 1200);
+    } catch (e) { console.error(e); } finally { setSending(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h3 className="font-bold text-gray-900">Message Country Head — Inventory</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{discrepancy.country} · {discrepancy.productKey} · {discrepancy.period}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="mb-4 p-3 bg-blue-50 rounded-xl border border-blue-100 text-xs space-y-1">
+          <div className="flex justify-between">
+            <span className="text-gray-500">Reported by country head:</span>
+            <span className="font-semibold text-gray-800">{discrepancy.demandInventoryQty?.toFixed(2)} t</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">MRP expected level:</span>
+            <span className="font-semibold text-blue-700">{discrepancy.mrpInventoryQty?.toFixed(2)} t</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">Difference:</span>
+            <span className="font-semibold text-red-600">{(discrepancy.demandInventoryQty - discrepancy.mrpInventoryQty).toFixed(2)} t</span>
+          </div>
+        </div>
+        <div className="mb-4">
+          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Your note</label>
+          <textarea
+            value={note} onChange={e => setNote(e.target.value)}
+            placeholder="Ask the country head to clarify their inventory level..."
+            rows={4}
+            className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
+          />
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50">Cancel</button>
+          <button
+            onClick={handleSend} disabled={sending || !note.trim() || sent}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
+          >
+            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : sent ? <CheckCircle2 className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+            {sent ? "Sent!" : "Send Message"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InventoryResolveModal({ discrepancy, onClose }) {
+  const { currentUser, userProfile } = useAuth();
+  const [choice, setChoice] = useState("demand");
+  const [saving, setSaving] = useState(false);
+
+  const resolvedQty = choice === "demand" ? discrepancy.demandInventoryQty : discrepancy.mrpInventoryQty;
+
+  const handleResolve = async () => {
+    setSaving(true);
+    try {
+      const baseData = { adminChoice: choice, resolvedQty, status: "admin_resolved", resolvedAt: serverTimestamp() };
+      if (discrepancy.message) {
+        await updateDoc(doc(db, "messages", discrepancy.message.id), baseData);
+      } else {
+        await addDoc(collection(db, "messages"), {
+          type: "inventory_discrepancy",
+          fromUserId: currentUser.uid,
+          fromUsername: userProfile?.username || "Admin",
+          toUserId: discrepancy.demandUserId,
+          toUserCountry: discrepancy.country,
+          productKey: discrepancy.productKey,
+          period: discrepancy.period,
+          adminNote: `Admin resolved directly. Accepted inventory level: ${resolvedQty.toFixed(2)} t.`,
+          mrpInventoryQty: discrepancy.mrpInventoryQty,
+          demandInventoryQty: discrepancy.demandInventoryQty,
+          countryHeadResponse: "",
+          createdAt: serverTimestamp(),
+          ...baseData,
+        });
+      }
+      onClose();
+    } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h3 className="font-bold text-gray-900">Resolve Inventory Discrepancy</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{discrepancy.country} · {discrepancy.productKey} · {discrepancy.period}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="mb-4 p-3 bg-blue-50 rounded-xl border border-blue-100 text-xs space-y-1">
+          <div className="flex justify-between">
+            <span className="text-gray-500">Country head reported:</span>
+            <span className="font-semibold text-gray-800">{discrepancy.demandInventoryQty?.toFixed(2)} t</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">MRP expected level:</span>
+            <span className="font-semibold text-blue-700">{discrepancy.mrpInventoryQty?.toFixed(2)} t</span>
+          </div>
+        </div>
+        <p className="text-sm font-semibold text-gray-700 mb-3">Which inventory level should be accepted?</p>
+        <div className="space-y-2 mb-5">
+          <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${choice === "demand" ? "border-[#2D6A2D] bg-green-50" : "border-gray-200 hover:border-gray-300"}`}>
+            <input type="radio" name="invResolveChoice" value="demand" checked={choice === "demand"} onChange={() => setChoice("demand")} className="mt-0.5 accent-[#2D6A2D]" />
+            <div>
+              <p className="font-semibold text-sm text-gray-800">Use country head's reported level</p>
+              <p className="text-xs text-gray-500 mt-0.5">{discrepancy.demandInventoryQty?.toFixed(2)} t (submitted by {discrepancy.demandUsername})</p>
+            </div>
+          </label>
+          <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${choice === "mrp" ? "border-blue-400 bg-blue-50" : "border-gray-200 hover:border-gray-300"}`}>
+            <input type="radio" name="invResolveChoice" value="mrp" checked={choice === "mrp"} onChange={() => setChoice("mrp")} className="mt-0.5 accent-blue-600" />
+            <div>
+              <p className="font-semibold text-sm text-gray-800">Use MRP expected level</p>
+              <p className="text-xs text-gray-500 mt-0.5">{discrepancy.mrpInventoryQty?.toFixed(2)} t (from active MRP import)</p>
+            </div>
+          </label>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} disabled={saving} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-60">Cancel</button>
+          <button
+            onClick={handleResolve} disabled={saving}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
+          >
+            {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+            {saving ? "Resolving…" : `Accept ${resolvedQty.toFixed(2)} t`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Section: Discrepancies ────────────────────────────────────────────────────
+function DiscrepanciesSection() {
+  const [demands, setDemands] = useState([]);
+  const [activeMrp, setActiveMrp] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [usersMap, setUsersMap] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [messageTarget, setMessageTarget] = useState(null);
+  const [resolveTarget, setResolveTarget] = useState(null);
+  const [discTab, setDiscTab] = useState("demand");
+  const [invMessageTarget, setInvMessageTarget] = useState(null);
+  const [invResolveTarget, setInvResolveTarget] = useState(null);
+
+  useEffect(() => {
+    const q = query(collection(db, "mrpImports"), where("isActive", "==", true));
+    return onSnapshot(q, snap => {
+      setActiveMrp(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
+    });
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, "demands"), orderBy("submittedAt", "desc"));
+    return onSnapshot(q, snap => {
+      setDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !d.archived));
+      setLoading(false);
+    });
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, "products"), orderBy("order"));
+    return onSnapshot(q, snap => {
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
+    });
+  }, []);
+
+  useEffect(() => {
+    return onSnapshot(collection(db, "messages"), snap => {
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, []);
+
+  useEffect(() => {
+    getDocs(query(collection(db, "users"), where("isApproved", "==", true))).then(snap => {
+      const map = {};
+      snap.docs.forEach(d => { map[d.id] = d.data(); });
+      setUsersMap(map);
+    });
+  }, []);
+
+  const productName = (key) => {
+    const p = products.find(p => p.key === key);
+    return p ? p.name : key;
+  };
+
+  const getDiscrepancyKey = (row, demand) =>
+    `${row.productKey}|${row.period?.trim().toLowerCase()}|${row.country?.trim().toLowerCase()}|${demand.userId}`;
+
+  const discrepancies = [];
+  if (activeMrp?.rows) {
+    for (const row of activeMrp.rows) {
+      if (!row.country) continue;
+      const rowCountry = row.country.trim().toLowerCase();
+      const rowPeriod = row.period.trim().toLowerCase();
+      const mrpQty = typeof row.suggestedQty === "number" ? row.suggestedQty : parseFloat(row.suggestedQty) || 0;
+      const matchingDemands = demands.filter(d => {
+        const effectiveCountry = (d.country?.trim() || usersMap[d.userId]?.country?.trim() || "").toLowerCase();
+        return d.month?.trim().toLowerCase() === rowPeriod && effectiveCountry === rowCountry;
+      });
+      for (const demand of matchingDemands) {
+        const demandQty = demand[row.productKey];
+        if (demandQty === undefined || demandQty === null) continue;
+        const dq = Number(demandQty);
+        if (!isNaN(dq) && Math.abs(dq - mrpQty) > 0.001) {
+          const existingMsg = messages.find(m =>
+            !m.type &&
+            m.productKey === row.productKey &&
+            m.period?.trim().toLowerCase() === rowPeriod &&
+            m.toUserCountry?.trim().toLowerCase() === rowCountry &&
+            m.toUserId === demand.userId
+          );
+          discrepancies.push({
+            productKey: row.productKey,
+            period: row.period,
+            country: row.country,
+            demandQty: dq,
+            mrpQty,
+            difference: dq - mrpQty,
+            demandUserId: demand.userId,
+            demandUsername: demand.username,
+            message: existingMsg || null,
+          });
+        }
+      }
+    }
+  }
+
+  const inventoryDiscrepancies = [];
+  if (activeMrp?.rows) {
+    for (const row of activeMrp.rows) {
+      if (row.currentInventoryQty == null) continue;
+      if (!row.country) continue;
+      const rowCountry = row.country.trim().toLowerCase();
+      const rowPeriod = row.period.trim().toLowerCase();
+      const mrpInvQty = Number(row.currentInventoryQty) || 0;
+      const matchingDemands = demands.filter(d => {
+        const effectiveCountry = (d.country?.trim() || usersMap[d.userId]?.country?.trim() || "").toLowerCase();
+        return d.month?.trim().toLowerCase() === rowPeriod && effectiveCountry === rowCountry;
+      });
+      for (const demand of matchingDemands) {
+        if (!demand.currentInventory) continue;
+        const demandInvQty = demand.currentInventory[row.productKey];
+        if (demandInvQty === undefined || demandInvQty === null) continue;
+        const diq = Number(demandInvQty);
+        if (!isNaN(diq) && Math.abs(diq - mrpInvQty) > 0.001) {
+          const existingMsg = messages.find(m =>
+            m.type === "inventory_discrepancy" &&
+            m.productKey === row.productKey &&
+            m.period?.trim().toLowerCase() === rowPeriod &&
+            m.toUserCountry?.trim().toLowerCase() === rowCountry &&
+            m.toUserId === demand.userId
+          );
+          inventoryDiscrepancies.push({
+            productKey: row.productKey,
+            period: row.period,
+            country: row.country,
+            demandInventoryQty: diq,
+            mrpInventoryQty: mrpInvQty,
+            difference: diq - mrpInvQty,
+            demandUserId: demand.userId,
+            demandUsername: demand.username,
+            message: existingMsg || null,
+          });
+        }
+      }
+    }
+  }
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" /></div>;
+
+  if (!activeMrp) {
+    return (
+      <div className="text-center py-10">
+        <AlertTriangle className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+        <p className="text-gray-400 text-sm">No active MRP import. Set one active in the MRP Imports tab to detect discrepancies.</p>
+      </div>
+    );
+  }
+
+  const orphanedRows = (activeMrp.rows || []).filter(row => {
+    if (!row.country) return false;
+    const rowCountry = row.country.trim().toLowerCase();
+    const rowPeriod = (row.period || "").trim().toLowerCase();
+    return !demands.some(d => {
+      const effectiveCountry = (d.country?.trim() || usersMap[d.userId]?.country?.trim() || "").toLowerCase();
+      return d.month?.trim().toLowerCase() === rowPeriod && effectiveCountry === rowCountry;
+    });
+  });
+
+  const renderDemandTab = () => {
+    if (discrepancies.length === 0) {
+      return (
+        <div className="space-y-4">
+          {orphanedRows.length > 0 ? (
+            <>
+              <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-800">
+                    {orphanedRows.length} MRP row{orphanedRows.length !== 1 ? "s" : ""} could not be matched to any demand submission
+                  </p>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    No approved user has their country set to the value below, or no submission exists for that period. Set the user&apos;s country in Active Accounts to match exactly.
+                  </p>
+                </div>
+              </div>
+              <div className="rounded-xl border border-amber-200 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-amber-50 border-b border-amber-200">
+                      {["MRP Country (exact)", "Period", "Product Key", "MRP Qty (t)", "Issue"].map(h => (
+                        <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-amber-700 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-amber-100">
+                    {orphanedRows.map((row, i) => {
+                      const anyUserHasCountry = Object.values(usersMap).some(
+                        u => (u.country || "").trim().toLowerCase() === row.country.trim().toLowerCase()
+                      );
+                      return (
+                        <tr key={i} className="bg-white">
+                          <td className="px-4 py-3 font-mono text-sm font-semibold text-amber-800">{row.country}</td>
+                          <td className="px-4 py-3 text-gray-700">{row.period}</td>
+                          <td className="px-4 py-3 font-mono text-gray-700">{row.productKey}</td>
+                          <td className="px-4 py-3 tabular-nums text-gray-700">{(row.suggestedQty ?? 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-xs text-amber-700">
+                            {anyUserHasCountry
+                              ? "User exists but has not submitted for this period yet"
+                              : `No user has country "${row.country}" — update a user's country in Active Accounts`}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-10">
+              <CheckCircle2 className="w-8 h-8 text-green-300 mx-auto mb-2" />
+              <p className="text-gray-500 text-sm font-medium">No demand discrepancies found.</p>
+              <p className="text-gray-400 text-xs mt-1">All matched submissions agree with the active MRP.</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+    return (
+      <div className="overflow-x-auto rounded-xl border border-gray-200">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-200">
+              {["Country", "Product", "Period", "Demand Submitted (t)", "MRP Suggested (t)", "Difference (t)", "Status", ""].map(h => (
+                <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {discrepancies.map((disc, i) => (
+              <tr key={i} className={`${(disc.message?.status === "resolved" || disc.message?.status === "admin_resolved") ? "bg-green-50/40" : "hover:bg-amber-50/40"} transition-colors`}>
+                <td className="px-4 py-3 font-medium text-gray-800">{disc.country}</td>
+                <td className="px-4 py-3 text-gray-700">{productName(disc.productKey)}</td>
+                <td className="px-4 py-3 text-gray-600">{disc.period}</td>
+                <td className="px-4 py-3 tabular-nums font-semibold text-gray-800">{disc.demandQty.toFixed(2)}</td>
+                <td className="px-4 py-3 tabular-nums text-amber-700 font-semibold">{disc.mrpQty.toFixed(2)}</td>
+                <td className={`px-4 py-3 tabular-nums font-semibold ${disc.difference > 0 ? "text-blue-600" : "text-red-600"}`}>
+                  {disc.difference > 0 ? "+" : ""}{disc.difference.toFixed(2)}
+                </td>
+                <td className="px-4 py-3">
+                  {disc.message ? (
+                    disc.message.status === "resolved" ? (
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0" />
+                        <span className="text-xs text-green-700 font-medium">Resolved</span>
+                      </div>
+                    ) : disc.message.status === "admin_resolved" ? (
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
+                        <span className="text-xs text-blue-700 font-medium">Admin resolved</span>
+                      </div>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700">Pending reply</span>
+                    )
+                  ) : (
+                    <span className="text-xs text-gray-400">No message</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {disc.message?.status === "resolved" ? (
+                    <div className="max-w-[200px]">
+                      <p className="text-xs text-green-700 font-medium">Chose: {disc.message.resolvedQty?.toFixed(2) ?? "—"} t</p>
+                      {disc.message.countryHeadResponse && (
+                        <p className="text-xs text-gray-400 italic truncate mt-0.5" title={disc.message.countryHeadResponse}>{disc.message.countryHeadResponse}</p>
+                      )}
+                    </div>
+                  ) : disc.message?.status === "admin_resolved" ? (
+                    <div className="max-w-[200px]">
+                      <p className="text-xs text-blue-700 font-medium">Chose: {disc.message.resolvedQty?.toFixed(2) ?? "—"} t</p>
+                      <p className="text-xs text-gray-400 mt-0.5">({disc.message.adminChoice === "demand" ? "manual demand" : "MRP"})</p>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setResolveTarget(disc); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-600 border border-blue-300 hover:bg-blue-50 transition-colors whitespace-nowrap"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Resolve
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setMessageTarget(disc); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors whitespace-nowrap"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        {disc.message ? "Re-message" : "Message"}
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderInventoryTab = () => {
+    if (inventoryDiscrepancies.length === 0) {
+      return (
+        <div className="text-center py-10">
+          <CheckCircle2 className="w-8 h-8 text-green-300 mx-auto mb-2" />
+          <p className="text-gray-500 text-sm font-medium">No inventory discrepancies found.</p>
+          <p className="text-gray-400 text-xs mt-1">Country head inventory levels match the active MRP, or MRP has no inventory data.</p>
+        </div>
+      );
+    }
+    return (
+      <div className="overflow-x-auto rounded-xl border border-gray-200">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-200">
+              {["Country", "Product", "Period", "Reported by CH (t)", "MRP Expected (t)", "Difference (t)", "Status", ""].map(h => (
+                <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {inventoryDiscrepancies.map((disc, i) => (
+              <tr key={i} className={`${disc.message?.status === "admin_resolved" ? "bg-blue-50/40" : "hover:bg-blue-50/30"} transition-colors`}>
+                <td className="px-4 py-3 font-medium text-gray-800">{disc.country}</td>
+                <td className="px-4 py-3 text-gray-700">{productName(disc.productKey)}</td>
+                <td className="px-4 py-3 text-gray-600">{disc.period}</td>
+                <td className="px-4 py-3 tabular-nums font-semibold text-gray-800">{disc.demandInventoryQty.toFixed(2)}</td>
+                <td className="px-4 py-3 tabular-nums text-blue-700 font-semibold">{disc.mrpInventoryQty.toFixed(2)}</td>
+                <td className={`px-4 py-3 tabular-nums font-semibold ${disc.difference > 0 ? "text-blue-600" : "text-red-600"}`}>
+                  {disc.difference > 0 ? "+" : ""}{disc.difference.toFixed(2)}
+                </td>
+                <td className="px-4 py-3">
+                  {disc.message?.status === "admin_resolved" ? (
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span className="text-xs text-blue-700 font-medium">Resolved</span>
+                    </div>
+                  ) : disc.message ? (
+                    <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-700">Pending reply</span>
+                  ) : (
+                    <span className="text-xs text-gray-400">No message</span>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {disc.message?.status === "admin_resolved" ? (
+                    <div className="max-w-[200px]">
+                      <p className="text-xs text-blue-700 font-medium">Accepted: {disc.message.resolvedQty?.toFixed(2) ?? "—"} t</p>
+                      <p className="text-xs text-gray-400 mt-0.5">({disc.message.adminChoice === "demand" ? "country head" : "MRP"})</p>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setInvResolveTarget(disc); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-blue-600 border border-blue-300 hover:bg-blue-50 transition-colors whitespace-nowrap"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Resolve
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setInvMessageTarget(disc); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors whitespace-nowrap"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        {disc.message ? "Re-message" : "Message"}
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-xs text-gray-400">
+          Comparing active MRP &quot;{activeMrp.label}&quot; against submitted data. Only combinations where both sides exist are shown.
+        </p>
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl">
+          <button
+            onClick={() => setDiscTab("demand")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${discTab === "demand" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+          >
+            Demand Quantities
+            {discrepancies.length > 0 && <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-bold text-xs">{discrepancies.length}</span>}
+          </button>
+          <button
+            onClick={() => setDiscTab("inventory")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${discTab === "inventory" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+          >
+            Inventory Levels
+            {inventoryDiscrepancies.length > 0 && <span className="px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold text-xs">{inventoryDiscrepancies.length}</span>}
+          </button>
+        </div>
+      </div>
+
+      {discTab === "demand" ? renderDemandTab() : renderInventoryTab()}
+
+      {messageTarget && <MessageCountryHeadModal discrepancy={messageTarget} onClose={() => setMessageTarget(null)} />}
+      {resolveTarget && <AdminResolveModal discrepancy={resolveTarget} onClose={() => setResolveTarget(null)} />}
+      {invMessageTarget && <InventoryMessageModal discrepancy={invMessageTarget} onClose={() => setInvMessageTarget(null)} />}
+      {invResolveTarget && <InventoryResolveModal discrepancy={invResolveTarget} onClose={() => setInvResolveTarget(null)} />}
+    </div>
+  );
+}
+
+// ─── Orders Section ───────────────────────────────────────────────────────────
+function CreateOrderModal({ country, countryUserId, products, activeMrp, currentUser, userProfile, onClose, onCreated }) {
+  const MONTHS_LIST = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const CURRENT_MONTH_STR = (() => { const d = new Date(); return `${MONTHS_LIST[d.getMonth()]} ${d.getFullYear()}`; })();
+
+  // Fetch inventory and demands exactly like CalculatedOrderTab does
+  const [countryInventory, setCountryInventory] = useState([]);
+  const [countryDemands, setCountryDemands] = useState([]);
+  const [countryMessages, setCountryMessages] = useState([]);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  useEffect(() => {
+    const q = query(collection(db, "inventory"), where("entity", "==", country));
+    return onSnapshot(q, snap => {
+      setCountryInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setDataLoading(false);
+    }, () => setDataLoading(false));
+  }, [country]);
+
+  useEffect(() => {
+    // Use userId-based query (same as country head) so no demand is missed
+    const q = countryUserId
+      ? query(collection(db, "demands"), where("userId", "==", countryUserId))
+      : query(collection(db, "demands"), where("country", "==", country));
+    return onSnapshot(q, snap => {
+      setCountryDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [countryUserId, country]);
+
+  useEffect(() => {
+    if (!countryUserId) return;
+    const q = query(collection(db, "messages"), where("toUserId", "==", countryUserId));
+    return onSnapshot(q, snap => {
+      setCountryMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [countryUserId]);
+
+  const getCalcQty = (productKey) => {
+    const thisMonthDemand = countryDemands.find(d => d.month === CURRENT_MONTH_STR);
+    const baseCurrent = thisMonthDemand?.currentInventory?.[productKey] ?? 0;
+    const receivedOrderQty = countryInventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && i.productKey === productKey).reduce((s, b) => s + (b.qty || 0), 0);
+    const currentQty = baseCurrent + receivedOrderQty;
+    const desiredQty = thisMonthDemand?.desiredInventory?.[productKey] ?? 0;
+    // Use resolved demand if discrepancy was resolved
+    const resolvedMsg = countryMessages.find(m =>
+      !m.type && m.productKey === productKey && m.period === CURRENT_MONTH_STR &&
+      (m.status === "resolved" || m.status === "admin_resolved")
+    );
+    let expectedDemand;
+    if (resolvedMsg) {
+      expectedDemand = resolvedMsg.resolvedQty ?? 0;
+    } else {
+      expectedDemand = thisMonthDemand ? (Number(thisMonthDemand[productKey]) || 0) : 0;
+      if (!expectedDemand && activeMrp?.rows) {
+        const mrpRow = activeMrp.rows.find(r => r.productKey === productKey && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
+        if (mrpRow) expectedDemand = typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty) || 0;
+      }
+    }
+    return Math.max(0, desiredQty + expectedDemand - currentQty);
+  };
+
+  const [mode, setMode] = useState("all"); // "all" | "single"
+  const [selectedProduct, setSelectedProduct] = useState(products[0]?.key || "");
+  const [period, setPeriod] = useState(CURRENT_MONTH_STR);
+  const [qtys, setQtys] = useState({});
+  const [notes, setNotes] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  // Populate default qtys once country data has loaded
+  useEffect(() => {
+    if (dataLoading) return;
+    setQtys(prev => {
+      const next = { ...prev };
+      products.forEach(p => {
+        if (next[p.key] === undefined) next[p.key] = getCalcQty(p.key).toFixed(2);
+      });
+      return next;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataLoading, countryInventory, countryDemands]);
+
+  const handleCreate = async () => {
+    setSaving(true); setError("");
+    try {
+      const keys = mode === "all" ? products.map(p => p.key) : [selectedProduct];
+      const items = keys.map(k => ({
+        productKey: k,
+        orderedQty: parseFloat(qtys[k]) || 0,
+        adminNote: (notes[k] || "").trim(),
+      }));
+      await addDoc(collection(db, "orders"), {
+        country,
+        status: "open",
+        period,
+        items,
+        createdAt: serverTimestamp(),
+        createdBy: userProfile?.username || currentUser?.uid || "Admin",
+        countryHeadComment: null,
+        inventoryBatchIds: [],
+        adminSeenReceipt: null,
+      });
+      onCreated();
+      onClose();
+    } catch (e) { console.error(e); setError("Failed to create order."); }
+    finally { setSaving(false); }
+  };
+
+  const displayProducts = mode === "all" ? products : products.filter(p => p.key === selectedProduct);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col">
+        {dataLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/80 rounded-2xl z-10">
+            <Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" />
+          </div>
+        )}
+        <div className="flex items-center justify-between p-5 border-b border-gray-100 shrink-0">
+          <div className="flex items-center gap-2">
+            <ShoppingCart className="w-4 h-4 text-[#2D6A2D]" />
+            <h3 className="font-bold text-gray-800 text-sm">Create Order — {country}</h3>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="overflow-y-auto flex-1 p-5 space-y-4">
+          {/* Mode toggle */}
+          <div className="flex gap-1 p-1 bg-gray-100 rounded-xl">
+            <button onClick={() => setMode("all")} className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${mode === "all" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>All Products</button>
+            <button onClick={() => setMode("single")} className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${mode === "single" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Single Product</button>
+          </div>
+
+          {mode === "single" && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Product</label>
+              <select value={selectedProduct} onChange={e => setSelectedProduct(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-[#4A9E4A] bg-white">
+                {products.map(p => <option key={p.key} value={p.key}>{p.name}</option>)}
+              </select>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Period</label>
+            <input type="text" value={period} onChange={e => setPeriod(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-[#4A9E4A]" placeholder="e.g. May 2026" />
+          </div>
+
+          <div className="space-y-3">
+            {displayProducts.map(p => (
+              <div key={p.key} className="rounded-xl border border-gray-200 p-4 space-y-2">
+                <p className="text-sm font-semibold text-gray-800">{p.name}</p>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-1">Order Qty (t)</label>
+                    <div className="relative">
+                      <input type="number" min="0" step="0.01" value={qtys[p.key] ?? ""} onChange={e => setQtys(prev => ({ ...prev, [p.key]: e.target.value }))} className="w-full px-3 py-2 pr-8 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-[#4A9E4A] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">t</span>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">Calculated: {getCalcQty(p.key).toFixed(2)} t</p>
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider block mb-1">Admin Note</label>
+                    <input type="text" value={notes[p.key] || ""} onChange={e => setNotes(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="Optional note…" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-[#4A9E4A]" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {error && <p className="text-xs text-red-600">{error}</p>}
+        </div>
+        <div className="p-5 border-t border-gray-100 shrink-0 flex gap-3">
+          <button onClick={onClose} disabled={saving} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-60">Cancel</button>
+          <button onClick={handleCreate} disabled={saving} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-60">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
+            {saving ? "Creating…" : "Create Order"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteOrderModal({ order, onClose }) {
+  const [deleting, setDeleting] = useState(false);
+  const batchIds = order.inventoryBatchIds || [];
+  const isReceived = order.status === "received";
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      if (isReceived && batchIds.length > 0) {
+        for (const batchId of batchIds) {
+          await deleteDoc(doc(db, "inventory", batchId));
+        }
+      }
+      await deleteDoc(doc(db, "orders", order.id));
+      onClose();
+    } catch (e) { console.error(e); setDeleting(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+            <Trash2 className="w-5 h-5 text-red-600" />
+          </div>
+          <div>
+            <h3 className="font-bold text-gray-900">Delete Order</h3>
+            <p className="text-sm text-gray-500">{order.country} · {order.period}</p>
+          </div>
+        </div>
+        {isReceived && batchIds.length > 0 && (
+          <div className="mb-4 p-3 bg-amber-50 rounded-xl border border-amber-200">
+            <p className="text-xs text-amber-800 font-medium">
+              This order was received. Deleting it will also remove the {batchIds.length} inventory batch{batchIds.length !== 1 ? "es" : ""} created upon receipt.
+            </p>
+          </div>
+        )}
+        <p className="text-sm text-gray-600 mb-5">This cannot be undone.</p>
+        <div className="flex gap-3">
+          <button onClick={onClose} disabled={deleting} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-60">Cancel</button>
+          <button onClick={handleDelete} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-60">
+            {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrdersSection() {
+  const { currentUser, userProfile } = useAuth();
+  const [orders, setOrders] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [inventory, setInventory] = useState([]);
+  const [demands, setDemands] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [activeMrp, setActiveMrp] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState("open"); // "open" | "all"
+  const [createTarget, setCreateTarget] = useState(null); // country string
+  const [editingOrder, setEditingOrder] = useState(null); // order id
+  const [editQtys, setEditQtys] = useState({});
+  const [editNotes, setEditNotes] = useState({});
+  const [saving, setSaving] = useState(null);
+  const [expandedOrder, setExpandedOrder] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  useEffect(() => {
+    return onSnapshot(collection(db, "orders"), snap => {
+      setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
+      setLoading(false);
+    });
+  }, []);
+
+  useEffect(() => {
+    getDocs(query(collection(db, "users"), where("isApproved", "==", true))).then(snap => {
+      setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, []);
+
+  useEffect(() => {
+    return onSnapshot(query(collection(db, "products"), orderBy("order")), snap => {
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
+    });
+  }, []);
+
+  useEffect(() => {
+    return onSnapshot(collection(db, "inventory"), snap => {
+      setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, []);
+
+  useEffect(() => {
+    return onSnapshot(query(collection(db, "demands"), orderBy("submittedAt", "desc")), snap => {
+      setDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !d.archived));
+    });
+  }, []);
+
+  useEffect(() => {
+    return onSnapshot(collection(db, "messages"), snap => {
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, []);
+
+  useEffect(() => {
+    return onSnapshot(query(collection(db, "mrpImports"), where("isActive", "==", true)), snap => {
+      setActiveMrp(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
+    });
+  }, []);
+
+  const MONTHS_LIST_ORD = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const CURRENT_MONTH_ORD = `${MONTHS_LIST_ORD[new Date().getMonth()]} ${new Date().getFullYear()}`;
+
+  const countries = [...new Set(users.map(u => u.country).filter(Boolean))].sort();
+
+  // Helper: compute calculated order qty for a country+product (mirrors CalculatedOrderTab)
+  const computeCalcQty = (country, productKey) => {
+    const countryUserIds = users.filter(u => u.country === country).map(u => u.id);
+    const thisMonthDemand = demands.find(d =>
+      d.month === CURRENT_MONTH_ORD && (
+        countryUserIds.includes(d.userId) ||
+        (d.country || "").trim().toLowerCase() === country.trim().toLowerCase()
+      )
+    );
+    const baseCurrent = thisMonthDemand?.currentInventory?.[productKey] ?? 0;
+    const receivedOrderQty = inventory.filter(i =>
+      (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt &&
+      i.productKey === productKey && i.entity?.trim().toLowerCase() === country.trim().toLowerCase()
+    ).reduce((s, b) => s + (b.qty || 0), 0);
+    const currentQty = baseCurrent + receivedOrderQty;
+    const desiredQty = thisMonthDemand?.desiredInventory?.[productKey] ?? 0;
+    const countryUserId = countryUserIds[0] || null;
+    const resolvedMsg = countryUserId ? messages.find(m =>
+      !m.type && m.productKey === productKey && m.period === CURRENT_MONTH_ORD &&
+      m.toUserId === countryUserId &&
+      (m.status === "resolved" || m.status === "admin_resolved")
+    ) : null;
+    let expectedDemand;
+    if (resolvedMsg) {
+      expectedDemand = resolvedMsg.resolvedQty ?? 0;
+    } else {
+      expectedDemand = thisMonthDemand ? (Number(thisMonthDemand[productKey]) || 0) : 0;
+      if (!expectedDemand && activeMrp?.rows) {
+        const mrpRow = activeMrp.rows.find(r =>
+          r.productKey === productKey && r.country?.trim().toLowerCase() === country.trim().toLowerCase()
+        );
+        if (mrpRow) expectedDemand = typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty) || 0;
+      }
+    }
+    return Math.max(0, desiredQty + expectedDemand - currentQty);
+  };
+
+  const countryHasOpenOrder = (country) =>
+    orders.some(o => o.country === country && o.status === "open");
+
+  const fmtDate = (ts) => {
+    if (!ts) return "—";
+    const d = ts.toDate?.();
+    return d ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+  };
+
+  const startEdit = (order) => {
+    const qMap = {};
+    const nMap = {};
+    (order.items || []).forEach(item => { qMap[item.productKey] = String(item.orderedQty ?? ""); nMap[item.productKey] = item.adminNote || ""; });
+    setEditQtys(qMap); setEditNotes(nMap); setEditingOrder(order.id);
+  };
+
+  const handleSaveEdit = async (order) => {
+    setSaving(order.id);
+    try {
+      const items = (order.items || []).map(item => ({
+        ...item,
+        orderedQty: parseFloat(editQtys[item.productKey]) || 0,
+        adminNote: (editNotes[item.productKey] || "").trim(),
+      }));
+      await updateDoc(doc(db, "orders", order.id), { items });
+      setEditingOrder(null);
+    } catch (e) { console.error(e); }
+    finally { setSaving(null); }
+  };
+
+  const handleMarkSeen = async (order) => {
+    await updateDoc(doc(db, "orders", order.id), { adminSeenReceipt: true });
+  };
+
+  const ordersToShow = view === "open"
+    ? orders.filter(o => o.status === "open")
+    : orders;
+
+  const newReceiptCount = orders.filter(o => o.status === "received" && o.adminSeenReceipt === false).length;
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" /></div>;
+
+  return (
+    <div className="space-y-5">
+      {/* View toggle + notification */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl">
+          <button onClick={() => setView("open")} className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${view === "open" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Open Orders</button>
+          <button onClick={() => setView("all")} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${view === "all" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+            All Orders
+            {newReceiptCount > 0 && <span className="px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-bold text-xs">{newReceiptCount}</span>}
+          </button>
+        </div>
+      </div>
+
+      {/* Open Orders: aggregated calculated quantities */}
+      {view === "open" && products.length > 0 && (
+        <div className="rounded-xl border border-gray-200 overflow-hidden">
+          <div className="bg-gray-50 border-b border-gray-200 px-4 py-2.5">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Aggregated Requested Quantities — {CURRENT_MONTH_ORD}</p>
+            <p className="text-xs text-gray-400 mt-0.5">Sum of calculated orders across all countries (Desired + Demand − Current)</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  {["Product","Type","Countries w/ Demand","Total Requested (t)"].map(h => (
+                    <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {products.map(p => {
+                  const totalCalc = countries.reduce((s, c) => s + computeCalcQty(c, p.key), 0);
+                  const countriesWithDemand = countries.filter(c => {
+                    const cIds = users.filter(u => u.country === c).map(u => u.id);
+                    return demands.some(d => d.month === CURRENT_MONTH_ORD && (cIds.includes(d.userId) || (d.country || "").trim().toLowerCase() === c.trim().toLowerCase()));
+                  }).length;
+                  return (
+                    <tr key={p.key} className="bg-white">
+                      <td className="px-4 py-2.5 font-medium text-gray-800">{p.name}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${p.type === "FG" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>{p.type || "HF"}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-500 text-xs">{countriesWithDemand} / {countries.length}</td>
+                      <td className="px-4 py-2.5 tabular-nums font-bold text-[#2D6A2D]">{totalCalc.toFixed(2)} t</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Country list for creating orders */}
+      {view === "open" && (
+        <div>
+          <p className="text-xs text-gray-400 mb-3">Click a country to create an order based on calculated quantities.</p>
+          {countries.length === 0 ? (
+            <p className="text-sm text-gray-400">No approved country accounts found.</p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {countries.map(country => {
+                const hasOpen = countryHasOpenOrder(country);
+                const openCount = orders.filter(o => o.country === country && o.status === "open").length;
+                return (
+                  <button
+                    key={country}
+                    onClick={() => setCreateTarget(country)}
+                    className={`rounded-xl border p-4 text-left transition-all hover:shadow-md ${hasOpen ? "border-amber-200 bg-amber-50/50" : "border-gray-200 bg-white hover:border-[#4A9E4A]"}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-lg bg-[#2D6A2D]/10 flex items-center justify-center">
+                          <Package className="w-4 h-4 text-[#2D6A2D]" />
+                        </div>
+                        <span className="font-semibold text-sm text-gray-800">{country}</span>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-gray-400" />
+                    </div>
+                    {hasOpen && (
+                      <p className="text-xs text-amber-600 mt-2">{openCount} open order{openCount !== 1 ? "s" : ""}</p>
+                    )}
+                    <p className="text-xs text-gray-400 mt-1">Click to create order</p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* All Orders: aggregated ordered summary */}
+      {view === "all" && products.length > 0 && orders.length > 0 && (
+        <div className="rounded-xl border border-gray-200 overflow-hidden">
+          <div className="bg-gray-50 border-b border-gray-200 px-4 py-2.5">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Order Summary — All Time</p>
+            <p className="text-xs text-gray-400 mt-0.5">Total quantities across all orders, split by status</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  {["Product","Type","Total Ordered (t)","Open (t)","Received (t)"].map(h => (
+                    <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {products.map(p => {
+                  const sumAll = orders.reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
+                  const sumOpen = orders.filter(o => o.status === "open").reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
+                  const sumReceived = orders.filter(o => o.status === "received").reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
+                  return (
+                    <tr key={p.key} className="bg-white">
+                      <td className="px-4 py-2.5 font-medium text-gray-800">{p.name}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${p.type === "FG" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>{p.type || "HF"}</span>
+                      </td>
+                      <td className="px-4 py-2.5 tabular-nums font-bold text-gray-800">{sumAll.toFixed(2)}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-amber-700 font-semibold">{sumOpen.toFixed(2)}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-green-700 font-semibold">{sumReceived.toFixed(2)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Orders list */}
+      {ordersToShow.length === 0 ? (
+        <div className="text-center py-10">
+          <ShoppingCart className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+          <p className="text-gray-400 text-sm">{view === "open" ? "No open orders." : "No orders yet."}</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {ordersToShow.map(order => {
+            const isReceived = order.status === "received";
+            const newReceipt = isReceived && order.adminSeenReceipt === false;
+            const isExpanded = expandedOrder === order.id;
+            const isEditing = editingOrder === order.id;
+            return (
+              <div key={order.id} className={`rounded-xl border overflow-hidden ${newReceipt ? "border-green-400 bg-green-50/30" : isReceived ? "border-green-200 bg-green-50/20" : "border-gray-200 bg-white"}`}>
+                <div className="flex items-center gap-3 px-4 py-3 cursor-pointer" onClick={() => { setExpandedOrder(isExpanded ? null : order.id); if (newReceipt) handleMarkSeen(order); }}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-sm text-gray-800">{order.country}</span>
+                      <span className="text-xs text-gray-400">·</span>
+                      <span className="text-xs text-gray-500">{order.period}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${isReceived ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                        {isReceived ? "Received" : "Open"}
+                      </span>
+                      {newReceipt && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-600 text-xs font-semibold">
+                          <Bell className="w-3 h-3" />New receipt
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Created {fmtDate(order.createdAt)} by {order.createdBy}
+                      {isReceived && order.receivedAt && ` · Received ${fmtDate(order.receivedAt)} by ${order.receivedBy}`}
+                    </p>
+                  </div>
+                  {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+                </div>
+
+                {isExpanded && (
+                  <div className="border-t border-gray-100 px-4 pb-4 pt-3 space-y-3">
+                    {/* Country head comment */}
+                    {order.countryHeadComment && (
+                      <div className="p-3 bg-blue-50 rounded-xl border border-blue-100">
+                        <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider mb-1">Country head comment</p>
+                        <p className="text-sm text-blue-800">{order.countryHeadComment}</p>
+                      </div>
+                    )}
+
+                    {/* Items table */}
+                    <div className="rounded-xl border border-gray-200 overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-100">
+                            {["Product", "Ordered Qty (t)", "Admin Note"].map(h => (
+                              <th key={h} className="text-left px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {(order.items || []).map(item => {
+                            const prod = products.find(p => p.key === item.productKey);
+                            return (
+                              <tr key={item.productKey}>
+                                <td className="px-3 py-2.5 font-medium text-gray-800">{prod?.name ?? item.productKey}</td>
+                                <td className="px-3 py-2.5">
+                                  {isEditing ? (
+                                    <div className="relative">
+                                      <input type="number" min="0" step="0.01" value={editQtys[item.productKey] ?? ""} onChange={e => setEditQtys(prev => ({ ...prev, [item.productKey]: e.target.value }))} className="w-24 px-2 py-1 rounded-lg border border-[#4A9E4A] text-sm focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                                    </div>
+                                  ) : (
+                                    <span className="tabular-nums font-semibold text-[#2D6A2D]">{(item.orderedQty ?? 0).toFixed(2)}</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2.5">
+                                  {isEditing ? (
+                                    <input type="text" value={editNotes[item.productKey] || ""} onChange={e => setEditNotes(prev => ({ ...prev, [item.productKey]: e.target.value }))} placeholder="Note…" className="w-full px-2 py-1 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-[#4A9E4A]" />
+                                  ) : (
+                                    <span className="text-gray-500">{item.adminNote || <span className="text-gray-300 italic">—</span>}</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex gap-2">
+                      {isEditing ? (
+                        <>
+                          <button onClick={() => handleSaveEdit(order)} disabled={saving === order.id} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-60">
+                            {saving === order.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}Save
+                          </button>
+                          <button onClick={() => setEditingOrder(null)} className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 border border-gray-200 hover:bg-gray-50">Cancel</button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => startEdit(order)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-600 border border-gray-200 hover:border-[#4A9E4A] hover:text-[#2D6A2D] transition-colors">
+                            <Pencil className="w-3.5 h-3.5" />Edit Order
+                          </button>
+                          <button onClick={() => setDeleteTarget(order)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 border border-red-200 hover:bg-red-50 transition-colors">
+                            <Trash2 className="w-3.5 h-3.5" />Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {createTarget && (
+        <CreateOrderModal
+          country={createTarget}
+          countryUserId={users.find(u => u.country === createTarget)?.id || null}
+          products={products}
+          activeMrp={activeMrp}
+          currentUser={currentUser}
+          userProfile={userProfile}
+          onClose={() => setCreateTarget(null)}
+          onCreated={() => setView("all")}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteOrderModal order={deleteTarget} onClose={() => setDeleteTarget(null)} />
+      )}
+    </div>
+  );
+}
+
 // ─── Main Admin Dashboard ──────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const [activeSection, setActiveSection] = useState("pending");
   const [pendingCount, setPendingCount] = useState(0);
+  const [newReceiptCount, setNewReceiptCount] = useState(0);
 
   useEffect(() => {
     const q = query(collection(db, "users"), where("isApproved", "==", false), where("role", "==", "pending"));
-    const unsubscribe = onSnapshot(q, (snap) => setPendingCount(snap.size));
-    return unsubscribe;
+    return onSnapshot(q, (snap) => setPendingCount(snap.size));
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, "orders"), where("status", "==", "received"), where("adminSeenReceipt", "==", false));
+    return onSnapshot(q, (snap) => setNewReceiptCount(snap.size));
   }, []);
 
   const sections = [
@@ -2051,6 +3780,8 @@ export default function AdminDashboard() {
     { id: "products", label: "Products", icon: Package },
     { id: "inventory", label: "Inventory", icon: Layers },
     { id: "mrp", label: "MRP Imports", icon: FileSpreadsheet },
+    { id: "orders", label: "Orders", icon: ShoppingCart, badge: newReceiptCount > 0 ? newReceiptCount : null },
+    { id: "discrepancies", label: "Discrepancies", icon: AlertTriangle, subtle: true },
   ];
 
   return (
@@ -2071,17 +3802,24 @@ export default function AdminDashboard() {
 
         {/* Section Tabs */}
         <div className="flex flex-col sm:flex-row gap-3">
-          {sections.map(({ id, label, icon: Icon, badge }) => (
+          {sections.map(({ id, label, icon: Icon, badge, subtle }) => (
             <button
               key={id}
               onClick={() => setActiveSection(id)}
-              className={`flex-1 flex items-center justify-center sm:justify-start gap-3 px-5 py-3.5 rounded-xl text-sm font-semibold border transition-all ${
-                activeSection === id
-                  ? "bg-[#2D6A2D] text-white border-[#2D6A2D] shadow-md"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-[#4A9E4A] hover:text-[#2D6A2D]"
-              }`}
+              className={subtle
+                ? `flex items-center justify-center sm:justify-start gap-2 px-4 py-3 rounded-xl border transition-all text-xs font-medium ${
+                    activeSection === id
+                      ? "bg-amber-50 text-amber-700 border-amber-300"
+                      : "bg-white text-gray-400 border-gray-200 hover:border-amber-200 hover:text-amber-600"
+                  }`
+                : `flex-1 flex items-center justify-center sm:justify-start gap-3 px-5 py-3.5 rounded-xl text-sm font-semibold border transition-all ${
+                    activeSection === id
+                      ? "bg-[#2D6A2D] text-white border-[#2D6A2D] shadow-md"
+                      : "bg-white text-gray-600 border-gray-200 hover:border-[#4A9E4A] hover:text-[#2D6A2D]"
+                  }`
+              }
             >
-              <Icon className="w-4 h-4 shrink-0" />
+              <Icon className={`shrink-0 ${subtle ? "w-3.5 h-3.5" : "w-4 h-4"}`} />
               <span>{label}</span>
               {badge !== null && badge !== undefined && (
                 <span className={`ml-auto px-2 py-0.5 rounded-full text-xs font-bold ${
@@ -2111,6 +3849,8 @@ export default function AdminDashboard() {
           {activeSection === "products" && <ProductManagement />}
           {activeSection === "inventory" && <InventoryManagement />}
           {activeSection === "mrp" && <MRPImportManagement />}
+          {activeSection === "orders" && <OrdersSection />}
+          {activeSection === "discrepancies" && <DiscrepanciesSection />}
         </div>
       </div>
     </Layout>

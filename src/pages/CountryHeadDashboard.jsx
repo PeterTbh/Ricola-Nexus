@@ -1,14 +1,15 @@
 import { useState, useEffect } from "react";
 import {
   collection, query, where, onSnapshot,
-  addDoc, updateDoc, doc, serverTimestamp, orderBy
+  addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, getDocs
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
 import Layout from "../components/Layout";
 import {
   Package, Send, History, CheckCircle2, AlertCircle,
-  Loader2, TrendingUp, Edit3, Save, X, BarChart2, Table, MessageSquare, Info
+  Loader2, TrendingUp, Edit3, Save, X, BarChart2, Table, MessageSquare, Info,
+  Layers, ChevronDown, ChevronRight, Truck, ShoppingCart, AlertTriangle
 } from "lucide-react";
 
 const MONTHS = [
@@ -87,6 +88,127 @@ function BarChart({ groups, barColors, barLabels, height = 140 }) {
   );
 }
 
+// ─── Change Country Modal ─────────────────────────────────────────────────────
+function ChangeCountryModal({ userId, currentCountry, onClose, onSaved }) {
+  const [knownCountries, setKnownCountries] = useState([]);
+  const [loadingCountries, setLoadingCountries] = useState(true);
+  const [mode, setMode] = useState("existing");
+  const [selectedCountry, setSelectedCountry] = useState("");
+  const [newCountry, setNewCountry] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    Promise.all([
+      getDocs(collection(db, "mrpImports")),
+      getDocs(query(collection(db, "users"), where("isApproved", "==", true))),
+    ]).then(([mrpSnap, usersSnap]) => {
+      const fromMrp = mrpSnap.docs.flatMap(d => (d.data().rows || []).map(r => r.country).filter(Boolean));
+      const fromUsers = usersSnap.docs.map(d => d.data().country).filter(Boolean);
+      const unique = [...new Set([...fromMrp, ...fromUsers])].sort();
+      setKnownCountries(unique);
+      if (unique.length === 0) {
+        setMode("new");
+      } else if (currentCountry && unique.includes(currentCountry)) {
+        setSelectedCountry(currentCountry);
+        setMode("existing");
+      } else {
+        setSelectedCountry(unique[0]);
+        setMode("existing");
+      }
+      setLoadingCountries(false);
+    }).catch(() => { setMode("new"); setLoadingCountries(false); });
+  }, [currentCountry]);
+
+  const handleSave = async () => {
+    const value = mode === "existing" ? selectedCountry : newCountry.trim();
+    if (!value) { setError("Please enter a country."); return; }
+    setSaving(true); setError("");
+    try {
+      await updateDoc(doc(db, "users", userId), { country: value });
+      onSaved(value);
+      onClose();
+    } catch {
+      setError("Failed to update. Please try again.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <h3 className="font-bold text-gray-900 text-sm">Set Your Country</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+
+        {loadingCountries ? (
+          <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-[#4A9E4A]" /></div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex gap-1 p-1 bg-gray-100 rounded-xl">
+              <button
+                onClick={() => setMode("existing")}
+                disabled={knownCountries.length === 0}
+                className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-40 ${mode === "existing" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+              >
+                Existing country
+              </button>
+              <button
+                onClick={() => setMode("new")}
+                className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${mode === "new" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+              >
+                New country
+              </button>
+            </div>
+
+            {mode === "existing" ? (
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Select country</label>
+                <select
+                  value={selectedCountry}
+                  onChange={e => setSelectedCountry(e.target.value)}
+                  className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]"
+                >
+                  {knownCountries.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <p className="text-xs text-gray-400 mt-1.5">Countries from MRP imports and existing accounts.</p>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Country name</label>
+                <input
+                  type="text"
+                  value={newCountry}
+                  onChange={e => { setNewCountry(e.target.value); setError(""); }}
+                  placeholder="e.g. Germany"
+                  autoFocus
+                  className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]"
+                />
+                <p className="text-xs text-gray-400 mt-1.5">Must match exactly the value in MRP imports for discrepancy detection to work.</p>
+              </div>
+            )}
+
+            {error && <p className="text-xs text-red-600">{error}</p>}
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={onClose} disabled={saving} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-60">Cancel</button>
+              <button
+                onClick={handleSave}
+                disabled={saving || (mode === "existing" && !selectedCountry) || (mode === "new" && !newCountry.trim())}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-60 transition-colors"
+              >
+                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Product Info View Modal (read-only for country heads) ────────────────────
 function ProductInfoViewModal({ product, onClose }) {
   return (
@@ -105,6 +227,16 @@ function ProductInfoViewModal({ product, onClose }) {
         <div className="space-y-4">
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+              Delivery Type
+            </p>
+            <div className="px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-sm min-h-[40px]">
+              {product.type === "FG"
+                ? <span className="text-gray-800">FG — Finished Good (external)</span>
+                : <span className="text-gray-800">HF — Halbfabrikat (internal)</span>}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
               Product-ID
             </p>
             <div className="px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-sm min-h-[40px]">
@@ -113,6 +245,16 @@ function ProductInfoViewModal({ product, onClose }) {
                 : <span className="text-gray-300 italic">Not set</span>}
             </div>
           </div>
+          {product.shelfLifeMonths != null && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                Shelf Life
+              </p>
+              <div className="px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-sm">
+                <span className="text-gray-800">{product.shelfLifeMonths} months</span>
+              </div>
+            </div>
+          )}
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
               Notes
@@ -136,14 +278,869 @@ function ProductInfoViewModal({ product, onClose }) {
   );
 }
 
+// ─── Inventory Tab ─────────────────────────────────────────────────────────────
+function CountryInventoryTab({ userProfile, products }) {
+  const { currentUser } = useAuth();
+  const [inventory, setInventory] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedProduct, setExpandedProduct] = useState(null);
+  const [marking, setMarking] = useState(null);
+
+  const country = userProfile?.country || "";
+
+  useEffect(() => {
+    if (!country) { setLoading(false); return; }
+    const q = query(collection(db, "inventory"), where("entity", "==", country));
+    return onSnapshot(q, snap => {
+      setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoading(false);
+    }, () => setLoading(false));
+  }, [country]);
+
+  const fmtDate = (ts) => {
+    if (!ts) return "—";
+    const d = ts.toDate?.();
+    if (!d) return "—";
+    return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  };
+
+  const fmtDateTime = (ts) => {
+    if (!ts) return "—";
+    const d = ts.toDate?.();
+    if (!d) return "—";
+    return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+
+  const handleMarkDelivered = async (item) => {
+    setMarking(item.id);
+    try {
+      await updateDoc(doc(db, "inventory", item.id), {
+        deliveredAt: serverTimestamp(),
+        deliveredBy: userProfile?.username || currentUser?.uid || "Unknown",
+      });
+    } catch (e) { console.error(e); }
+    finally { setMarking(null); }
+  };
+
+  // Group current inventory by productKey (exclude desired)
+  const currentItems = inventory.filter(i => !i.levelType || i.levelType === "current");
+  const productMap = {};
+  for (const p of products) {
+    const batches = currentItems.filter(i => i.productKey === p.key);
+    if (batches.length === 0) continue;
+    const totalQty = batches.reduce((s, b) => s + (b.qty || 0), 0);
+    const expiries = batches.map(b => b.expiryDate?.toDate?.()).filter(Boolean);
+    const earliestExpiry = expiries.length > 0 ? expiries.reduce((min, d) => d < min ? d : min) : null;
+
+    // Desired levels
+    const desiredManual = inventory.filter(i => i.productKey === p.key && i.levelType === "desired" && i.source !== "mrp");
+    const desiredMrp = inventory.filter(i => i.productKey === p.key && i.levelType === "desired" && i.source === "mrp");
+
+    // Carry-forward: use most recent desired if no current-month desired exists
+    const latestDesiredManual = desiredManual.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0))[0];
+    const latestDesiredMrp = desiredMrp.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0))[0];
+
+    productMap[p.key] = { product: p, batches, totalQty, earliestExpiry, latestDesiredManual, latestDesiredMrp };
+  }
+
+  if (!country) {
+    return (
+      <div className="text-center py-10">
+        <Layers className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+        <p className="text-gray-400 text-sm">No country assigned to your account. Contact an administrator.</p>
+      </div>
+    );
+  }
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" /></div>;
+
+  const productGroups = Object.values(productMap);
+
+  if (productGroups.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <Layers className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+        <p className="text-gray-400 text-sm">No inventory records found for {country}.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {productGroups.map(({ product, batches, totalQty, earliestExpiry, latestDesiredManual, latestDesiredMrp }) => {
+        const isExpanded = expandedProduct === product.key;
+        const dManual = latestDesiredManual?.qty;
+        const dMrp = latestDesiredMrp?.qty;
+        const showBothDesired = dManual != null && dMrp != null;
+
+        return (
+          <div key={product.key} className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+            <div className="flex items-center gap-4 px-4 py-3">
+              <div className="w-9 h-9 rounded-lg bg-[#2D6A2D]/10 flex items-center justify-center shrink-0">
+                <Package className="w-4.5 h-4.5 text-[#2D6A2D]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm text-gray-800">{product.name}</p>
+                <div className="flex flex-wrap gap-3 mt-0.5">
+                  <span className="text-xs text-gray-500">Stock: <span className="font-bold text-[#2D6A2D]">{totalQty.toFixed(2)} t</span></span>
+                  {earliestExpiry && (
+                    <span className="text-xs text-gray-500">Expires: <span className="font-medium text-gray-700">{earliestExpiry.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span></span>
+                  )}
+                  {product.shelfLifeMonths != null && (
+                    <span className="text-xs text-gray-500">Shelf life: <span className="font-medium text-gray-700">{product.shelfLifeMonths} mo</span></span>
+                  )}
+                  {!showBothDesired && dManual != null && (
+                    <span className="text-xs text-gray-500">Desired: <span className="font-medium text-purple-700">{dManual.toFixed(2)} t</span></span>
+                  )}
+                  {!showBothDesired && dMrp != null && (
+                    <span className="text-xs text-gray-500">Desired (MRP): <span className="font-medium text-purple-700">{dMrp.toFixed(2)} t</span></span>
+                  )}
+                  {showBothDesired && (
+                    <span className="text-xs text-gray-500">
+                      Desired (Manual): <span className="font-medium text-purple-700">{dManual.toFixed(2)} t</span>
+                      {" "}&nbsp;Desired (MRP): <span className={`font-medium ${Math.abs(dManual - dMrp) > 0.001 ? "text-amber-600" : "text-purple-700"}`}>{dMrp.toFixed(2)} t</span>
+                      {Math.abs(dManual - dMrp) > 0.001 && <span className="text-amber-500 ml-1">(Δ {(dManual - dMrp).toFixed(2)})</span>}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => setExpandedProduct(isExpanded ? null : product.key)}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:text-[#2D6A2D] hover:bg-green-50 border border-gray-200 hover:border-[#4A9E4A] transition-colors"
+              >
+                {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                More Info
+              </button>
+            </div>
+
+            {isExpanded && (
+              <div className="border-t border-gray-100 bg-gray-50">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">Batch ID</th>
+                      <th className="text-right px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">Qty (t)</th>
+                      <th className="text-left px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">Expiry</th>
+                      <th className="text-left px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">Status</th>
+                      <th className="px-4 py-2.5" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {batches.map(batch => (
+                      <tr key={batch.id} className="hover:bg-white transition-colors">
+                        <td className="px-4 py-2.5 text-gray-700">{batch.batchId || <span className="text-gray-300 italic">—</span>}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-[#2D6A2D]">{(batch.qty ?? 0).toFixed(2)}</td>
+                        <td className="px-4 py-2.5 text-gray-600">{fmtDate(batch.expiryDate)}</td>
+                        <td className="px-4 py-2.5">
+                          {batch.deliveredAt ? (
+                            <div className="flex items-center gap-1">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+                              <span className="text-green-700 font-medium">Delivered {fmtDateTime(batch.deliveredAt)}</span>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">Not delivered</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          {!batch.deliveredAt && (
+                            <button
+                              onClick={() => handleMarkDelivered(batch)}
+                              disabled={marking === batch.id}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 disabled:opacity-60 transition-colors"
+                            >
+                              {marking === batch.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Truck className="w-3 h-3" />}
+                              Mark Delivered
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Messages Tab ──────────────────────────────────────────────────────────────
+function MessagesTab({ userProfile }) {
+  const { currentUser } = useAuth();
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [responses, setResponses] = useState({});
+  const [choices, setChoices] = useState({});
+  const [submitting, setSubmitting] = useState(null);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(collection(db, "messages"), where("toUserId", "==", currentUser.uid));
+    return onSnapshot(q, snap => {
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => {
+        const aTime = a.createdAt?.seconds || 0;
+        const bTime = b.createdAt?.seconds || 0;
+        return bTime - aTime;
+      });
+      setMessages(data);
+      setLoading(false);
+    }, () => setLoading(false));
+  }, [currentUser]);
+
+  const fmtDateTime = (ts) => {
+    if (!ts) return "—";
+    const d = ts.toDate?.();
+    if (!d) return "—";
+    return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+
+  const handleSubmitDecision = async (msg) => {
+    const choice = choices[msg.id];
+    if (!choice) return;
+    const resolvedQty = choice === "demand" ? msg.demandQty : msg.mrpQty;
+    setSubmitting(msg.id);
+    try {
+      await updateDoc(doc(db, "messages", msg.id), {
+        countryHeadResponse: (responses[msg.id] || "").trim(),
+        countryHeadChoice: choice,
+        resolvedQty,
+        status: "resolved",
+        resolvedAt: serverTimestamp(),
+      });
+      setResponses(prev => ({ ...prev, [msg.id]: "" }));
+      setChoices(prev => { const n = { ...prev }; delete n[msg.id]; return n; });
+    } catch (e) { console.error(e); }
+    finally { setSubmitting(null); }
+  };
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" /></div>;
+
+  if (messages.length === 0) {
+    return (
+      <div className="text-center py-10">
+        <MessageSquare className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+        <p className="text-gray-400 text-sm">No messages from the admin team.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {messages.map(msg => (
+        <div
+          key={msg.id}
+          className={`rounded-xl border p-4 ${
+            msg.status === "resolved" ? "border-green-200 bg-green-50/40" :
+            msg.status === "admin_resolved" ? "border-blue-200 bg-blue-50/30" :
+            "border-amber-200 bg-amber-50/30"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm text-gray-800">{msg.productKey}</span>
+                <span className="text-gray-400 text-sm">·</span>
+                <span className="text-sm text-gray-600">{msg.period}</span>
+                {msg.status === "resolved"
+                  ? <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">Resolved</span>
+                  : msg.status === "admin_resolved"
+                  ? <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">Admin Resolved</span>
+                  : <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">Pending</span>
+                }
+              </div>
+              <p className="text-xs text-gray-400 mt-0.5">From {msg.fromUsername} · {fmtDateTime(msg.createdAt)}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 mb-3 p-3 bg-white rounded-lg border border-gray-100 text-xs">
+            <div>
+              <p className="text-gray-400 mb-0.5">Demand submitted</p>
+              <p className="font-bold text-gray-800">{msg.demandQty?.toFixed(2)} t</p>
+            </div>
+            <div>
+              <p className="text-gray-400 mb-0.5">MRP suggested</p>
+              <p className="font-bold text-amber-700">{msg.mrpQty?.toFixed(2)} t</p>
+            </div>
+            <div>
+              <p className="text-gray-400 mb-0.5">Difference</p>
+              <p className={`font-bold ${(msg.demandQty - msg.mrpQty) > 0 ? "text-blue-600" : "text-red-600"}`}>
+                {((msg.demandQty || 0) - (msg.mrpQty || 0)).toFixed(2)} t
+              </p>
+            </div>
+          </div>
+
+          <div className="mb-3 p-3 bg-white rounded-lg border border-gray-100">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Admin note</p>
+            <p className="text-sm text-gray-700">{msg.adminNote}</p>
+          </div>
+
+          {msg.status === "admin_resolved" ? (
+            <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+              <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider mb-1">Admin resolved</p>
+              <p className="text-sm text-blue-800">
+                Admin chose: <span className="font-semibold">{msg.resolvedQty?.toFixed(2)} t</span>
+                {" "}({msg.adminChoice === "demand" ? "your submitted value" : "MRP expected value"})
+              </p>
+              <p className="text-xs text-gray-400 mt-1">Resolved {fmtDateTime(msg.resolvedAt)}</p>
+            </div>
+          ) : msg.status === "resolved" ? (
+            <div className="p-3 bg-green-50 rounded-lg border border-green-100">
+              <p className="text-xs font-semibold text-green-700 uppercase tracking-wider mb-1">Your decision</p>
+              <p className="text-sm text-green-800">
+                {msg.countryHeadChoice === "demand"
+                  ? <>Kept submitted value: <span className="font-semibold">{(msg.resolvedQty ?? msg.demandQty)?.toFixed(2)} t</span></>
+                  : msg.countryHeadChoice === "mrp"
+                  ? <>Used MRP value: <span className="font-semibold">{(msg.resolvedQty ?? msg.mrpQty)?.toFixed(2)} t</span></>
+                  : msg.countryHeadResponse}
+              </p>
+              {msg.countryHeadResponse && msg.countryHeadChoice && (
+                <p className="text-xs text-green-700 italic mt-1">{msg.countryHeadResponse}</p>
+              )}
+              <p className="text-xs text-gray-400 mt-1">Resolved {fmtDateTime(msg.resolvedAt)}</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Your decision</p>
+              <div className="space-y-2">
+                <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${choices[msg.id] === "demand" ? "border-[#2D6A2D] bg-green-50" : "border-gray-200 hover:border-gray-300"}`}>
+                  <input
+                    type="radio"
+                    name={`choice-${msg.id}`}
+                    value="demand"
+                    checked={choices[msg.id] === "demand"}
+                    onChange={() => setChoices(prev => ({ ...prev, [msg.id]: "demand" }))}
+                    className="mt-0.5 accent-[#2D6A2D]"
+                  />
+                  <div>
+                    <p className="font-semibold text-sm text-gray-800">Keep my submitted value</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{msg.demandQty?.toFixed(2)} t</p>
+                  </div>
+                </label>
+                <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${choices[msg.id] === "mrp" ? "border-amber-400 bg-amber-50" : "border-gray-200 hover:border-gray-300"}`}>
+                  <input
+                    type="radio"
+                    name={`choice-${msg.id}`}
+                    value="mrp"
+                    checked={choices[msg.id] === "mrp"}
+                    onChange={() => setChoices(prev => ({ ...prev, [msg.id]: "mrp" }))}
+                    className="mt-0.5 accent-amber-600"
+                  />
+                  <div>
+                    <p className="font-semibold text-sm text-gray-800">Use MRP expected value</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{msg.mrpQty?.toFixed(2)} t</p>
+                  </div>
+                </label>
+              </div>
+              <textarea
+                value={responses[msg.id] || ""}
+                onChange={e => setResponses(prev => ({ ...prev, [msg.id]: e.target.value }))}
+                placeholder="Add an optional comment or explanation..."
+                rows={2}
+                className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
+              />
+              <button
+                onClick={() => handleSubmitDecision(msg)}
+                disabled={submitting === msg.id || !choices[msg.id]}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
+              >
+                {submitting === msg.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                Submit Decision
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Country Orders Tab ───────────────────────────────────────────────────────
+function CountryOrdersTab({ userProfile, products }) {
+  const { currentUser } = useAuth();
+  const [orders, setOrders] = useState([]);
+  const [inventory, setInventory] = useState([]);
+  const [activeMrp, setActiveMrp] = useState(null);
+  const [demands, setDemands] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [comments, setComments] = useState({});
+  const [submittingComment, setSubmittingComment] = useState(null);
+  const [marking, setMarking] = useState(null);
+  const [undoing, setUndoing] = useState(null);
+
+  const country = userProfile?.country || "";
+  const MONTHS_LIST = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const CURRENT_MONTH_STR = (() => { const d = new Date(); return `${MONTHS_LIST[d.getMonth()]} ${d.getFullYear()}`; })();
+
+  useEffect(() => {
+    if (!country) { setLoading(false); return; }
+    const q = query(collection(db, "orders"), where("country", "==", country), orderBy("createdAt", "desc"));
+    return onSnapshot(q, snap => {
+      setOrders(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoading(false);
+    }, () => setLoading(false));
+  }, [country]);
+
+  useEffect(() => {
+    if (!country) return;
+    return onSnapshot(query(collection(db, "inventory"), where("entity", "==", country)), snap => {
+      setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [country]);
+
+  useEffect(() => {
+    return onSnapshot(query(collection(db, "mrpImports"), where("isActive", "==", true)), snap => {
+      setActiveMrp(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    return onSnapshot(query(collection(db, "demands"), where("userId", "==", currentUser.uid)), snap => {
+      setDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [currentUser]);
+
+  const getCalculatedQty = (productKey) => {
+    const thisMonth = demands.find(d => d.month === CURRENT_MONTH_STR);
+    const baseCurrent = thisMonth?.currentInventory?.[productKey] ?? 0;
+    const receivedOrderQty = inventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && i.productKey === productKey).reduce((s, b) => s + (b.qty || 0), 0);
+    const currentQty = baseCurrent + receivedOrderQty;
+    const desiredQty = thisMonth?.desiredInventory?.[productKey] ?? 0;
+    let expectedDemand = thisMonth ? (Number(thisMonth[productKey]) || 0) : 0;
+    if (!expectedDemand && activeMrp?.rows) {
+      const mrpRow = activeMrp.rows.find(r => r.productKey === productKey && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
+      if (mrpRow) expectedDemand = typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty) || 0;
+    }
+    return Math.max(0, desiredQty + expectedDemand - currentQty);
+  };
+
+  const handleMarkReceived = async (order) => {
+    if (order.status === "received" || marking) return;
+    setMarking(order.id);
+    try {
+      const batchIds = [];
+      for (const item of order.items) {
+        const ref = await addDoc(collection(db, "inventory"), {
+          productKey: item.productKey, entity: country,
+          batchId: `ORDER-${order.id.slice(-6)}`,
+          qty: item.orderedQty, levelType: "current",
+          deliveredAt: serverTimestamp(),
+          deliveredBy: userProfile?.username || currentUser?.uid || "Unknown",
+          orderId: order.id, source: "order",
+          updatedAt: serverTimestamp(),
+        });
+        batchIds.push(ref.id);
+      }
+      await updateDoc(doc(db, "orders", order.id), {
+        status: "received",
+        receivedAt: serverTimestamp(),
+        receivedBy: userProfile?.username || currentUser?.uid || "Unknown",
+        inventoryBatchIds: batchIds,
+        adminSeenReceipt: false,
+      });
+    } catch (e) { console.error(e); }
+    finally { setMarking(null); }
+  };
+
+  const handleUndoReceipt = async (order) => {
+    setUndoing(order.id);
+    try {
+      for (const batchId of (order.inventoryBatchIds || [])) {
+        await deleteDoc(doc(db, "inventory", batchId));
+      }
+      await updateDoc(doc(db, "orders", order.id), {
+        status: "open",
+        receivedAt: null,
+        receivedBy: null,
+        inventoryBatchIds: [],
+        adminSeenReceipt: null,
+      });
+    } catch (e) { console.error(e); }
+    finally { setUndoing(null); }
+  };
+
+  const handleSendComment = async (order) => {
+    const comment = (comments[order.id] || "").trim();
+    if (!comment) return;
+    setSubmittingComment(order.id);
+    try {
+      await updateDoc(doc(db, "orders", order.id), {
+        countryHeadComment: comment,
+        countryHeadCommentAt: serverTimestamp(),
+      });
+      setComments(prev => ({ ...prev, [order.id]: "" }));
+    } catch (e) { console.error(e); }
+    finally { setSubmittingComment(null); }
+  };
+
+  const fmtDate = (ts) => {
+    if (!ts) return "—";
+    const d = ts.toDate?.();
+    return d ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+  };
+
+  if (!country) return (
+    <div className="text-center py-10">
+      <AlertTriangle className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+      <p className="text-gray-400 text-sm">No country assigned. Contact an administrator.</p>
+    </div>
+  );
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" /></div>;
+
+  if (orders.length === 0) return (
+    <div className="text-center py-10">
+      <ShoppingCart className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+      <p className="text-gray-400 text-sm">No orders created for {country} yet.</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {orders.map(order => {
+        const isReceived = order.status === "received";
+        return (
+          <div key={order.id} className={`rounded-xl border p-5 space-y-4 ${isReceived ? "border-green-200 bg-green-50/30" : "border-gray-200 bg-white"}`}>
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-gray-800">{order.period || "—"}</span>
+                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${isReceived ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                    {isReceived ? "Received" : "Open"}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">Created {fmtDate(order.createdAt)} by {order.createdBy || "Admin"}</p>
+                {isReceived && order.receivedAt && (
+                  <p className="text-xs text-green-600 mt-0.5">Received {fmtDate(order.receivedAt)} by {order.receivedBy}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Order items with deviation */}
+            <div className="rounded-xl border border-gray-200 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-100">
+                    {["Product", "Ordered Qty (t)", "Your Calc. (t)", "Deviation", "Admin Note"].map(h => (
+                      <th key={h} className="text-left px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wider">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {(order.items || []).map(item => {
+                    const prod = products.find(p => p.key === item.productKey);
+                    const calcQty = getCalculatedQty(item.productKey);
+                    const deviation = item.orderedQty - calcQty;
+                    return (
+                      <tr key={item.productKey} className="hover:bg-gray-50">
+                        <td className="px-3 py-2.5 font-medium text-gray-800">{prod?.name ?? item.productKey}</td>
+                        <td className="px-3 py-2.5 tabular-nums font-semibold text-[#2D6A2D]">{(item.orderedQty ?? 0).toFixed(2)}</td>
+                        <td className="px-3 py-2.5 tabular-nums text-gray-600">{calcQty.toFixed(2)}</td>
+                        <td className={`px-3 py-2.5 tabular-nums font-semibold ${Math.abs(deviation) < 0.001 ? "text-gray-400" : deviation > 0 ? "text-blue-600" : "text-red-600"}`}>
+                          {Math.abs(deviation) < 0.001 ? "—" : `${deviation > 0 ? "+" : ""}${deviation.toFixed(2)}`}
+                        </td>
+                        <td className="px-3 py-2.5 text-gray-500">{item.adminNote || <span className="text-gray-300 italic">—</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Comment */}
+            {order.countryHeadComment && (
+              <div className="p-3 bg-blue-50 rounded-xl border border-blue-100">
+                <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider mb-1">Your comment</p>
+                <p className="text-sm text-blue-800">{order.countryHeadComment}</p>
+              </div>
+            )}
+            <div className="space-y-2">
+              <textarea
+                value={comments[order.id] || ""}
+                onChange={e => setComments(prev => ({ ...prev, [order.id]: e.target.value }))}
+                placeholder="Add a comment for the admin…"
+                rows={2}
+                className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
+              />
+              <button
+                onClick={() => handleSendComment(order)}
+                disabled={submittingComment === order.id || !(comments[order.id] || "").trim()}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-50 transition-colors"
+              >
+                {submittingComment === order.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                Send Comment
+              </button>
+            </div>
+
+            {/* Receive / Undo buttons */}
+            <div className="flex gap-3 pt-1 border-t border-gray-100">
+              {!isReceived ? (
+                <button
+                  onClick={() => handleMarkReceived(order)}
+                  disabled={marking !== null || order.status === "received" || undoing !== null}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-60 transition-colors"
+                >
+                  {marking === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+                  Order Received
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleUndoReceipt(order)}
+                  disabled={undoing === order.id}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-60 transition-colors"
+                >
+                  {undoing === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                  Undo Receipt
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Calculated Order Tab ─────────────────────────────────────────────────────
+function CalculatedOrderTab({ userProfile, products }) {
+  const { currentUser } = useAuth();
+  const [inventory, setInventory] = useState([]);
+  const [activeMrp, setActiveMrp] = useState(null);
+  const [demands, setDemands] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [marking, setMarking] = useState(null);
+
+  const country = userProfile?.country || "";
+
+  useEffect(() => {
+    if (!country) { setLoading(false); return; }
+    const q = query(collection(db, "inventory"), where("entity", "==", country));
+    return onSnapshot(q, snap => {
+      setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoading(false);
+    }, () => setLoading(false));
+  }, [country]);
+
+  useEffect(() => {
+    const q = query(collection(db, "mrpImports"), where("isActive", "==", true));
+    return onSnapshot(q, snap => {
+      setActiveMrp(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(collection(db, "demands"), where("userId", "==", currentUser.uid));
+    return onSnapshot(q, snap => {
+      setDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const q = query(collection(db, "messages"), where("toUserId", "==", currentUser.uid));
+    return onSnapshot(q, snap => {
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [currentUser]);
+
+  const handleMarkReceived = async (batch) => {
+    setMarking(batch.id);
+    try {
+      await updateDoc(doc(db, "inventory", batch.id), {
+        deliveredAt: serverTimestamp(),
+        deliveredBy: userProfile?.username || currentUser?.uid || "Unknown",
+      });
+    } catch (e) { console.error(e); }
+    finally { setMarking(null); }
+  };
+
+  if (!country) {
+    return (
+      <div className="text-center py-10">
+        <AlertTriangle className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+        <p className="text-gray-400 text-sm">No country assigned to your account. Contact an administrator.</p>
+      </div>
+    );
+  }
+
+  if (loading) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" /></div>;
+
+  const CURRENT_MONTH_STR = (() => {
+    const MONTHS_L = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    const d = new Date();
+    return `${MONTHS_L[d.getMonth()]} ${d.getFullYear()}`;
+  })();
+
+  const currentItems = inventory.filter(i => !i.levelType || i.levelType === "current");
+
+  // pending deliveries = current batches without deliveredAt
+  const pendingDeliveries = currentItems.filter(b => !b.deliveredAt);
+
+  const fmtDate = (ts) => {
+    if (!ts) return "—";
+    const d = ts.toDate?.();
+    if (!d) return "—";
+    return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Calculated Order Cards */}
+      <div>
+        <h3 className="text-sm font-bold text-gray-700 mb-3">Calculated Order Quantities</h3>
+        <p className="text-xs text-gray-400 mb-4">
+          Formula: <span className="font-mono">Desired Inventory + Expected Demand − Current Inventory</span>
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {products.map(p => {
+            const thisMonthDemand = demands.find(d => d.month === CURRENT_MONTH_STR);
+
+            // Current and desired come from the demand submission
+            const baseCurrent = thisMonthDemand?.currentInventory?.[p.key] ?? 0;
+            // Add inventory batches from received orders (source: "order") for real-time update
+            const receivedOrderQty = currentItems.filter(i => i.source === "order" && i.deliveredAt && i.productKey === p.key).reduce((s, b) => s + (b.qty || 0), 0);
+            const currentQty = baseCurrent + receivedOrderQty;
+            const desiredQty = thisMonthDemand?.desiredInventory?.[p.key] ?? 0;
+
+            // Expected demand: check for resolved discrepancy first
+            const resolvedMsg = messages.find(m =>
+              !m.type && m.productKey === p.key && m.period === CURRENT_MONTH_STR &&
+              (m.status === "resolved" || m.status === "admin_resolved")
+            );
+            const hasUnresolved = messages.some(m =>
+              !m.type && m.productKey === p.key && m.period === CURRENT_MONTH_STR &&
+              m.status === "pending"
+            );
+            let expectedDemand = 0;
+            if (resolvedMsg) {
+              expectedDemand = resolvedMsg.resolvedQty ?? 0;
+            } else if (!hasUnresolved) {
+              expectedDemand = thisMonthDemand ? (Number(thisMonthDemand[p.key]) || 0) : 0;
+              if (!expectedDemand && activeMrp?.rows) {
+                const mrpRow = activeMrp.rows.find(r =>
+                  r.productKey === p.key &&
+                  r.country?.trim().toLowerCase() === country.trim().toLowerCase()
+                );
+                if (mrpRow) expectedDemand = typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty) || 0;
+              }
+            }
+
+            const calculatedOrder = Math.max(0, desiredQty + expectedDemand - currentQty);
+            const hasData = currentQty > 0 || desiredQty > 0 || expectedDemand > 0;
+
+            return (
+              <div key={p.key} className="rounded-xl border border-gray-200 bg-white p-4 space-y-3">
+                <p className="font-semibold text-sm text-gray-800">{p.name}</p>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Desired inventory</span>
+                    <span className="tabular-nums font-medium text-purple-700">{desiredQty.toFixed(2)} t</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Expected demand</span>
+                    <span className="tabular-nums font-medium text-blue-700">{expectedDemand.toFixed(2)} t</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Current inventory</span>
+                    <span className="tabular-nums font-medium text-gray-700">− {currentQty.toFixed(2)} t</span>
+                  </div>
+                  <div className="border-t border-gray-100 pt-1.5 flex justify-between">
+                    <span className="font-semibold text-gray-700">Order quantity</span>
+                    <span className={`tabular-nums font-bold text-base ${calculatedOrder > 0 ? "text-[#2D6A2D]" : "text-gray-400"}`}>
+                      {calculatedOrder.toFixed(2)} t
+                    </span>
+                  </div>
+                </div>
+                {hasUnresolved && (
+                  <p className="text-xs text-amber-600 italic">Demand discrepancy pending — order quantity on hold.</p>
+                )}
+                {!hasData && !hasUnresolved && (
+                  <p className="text-xs text-gray-300 italic">No inventory or demand data yet.</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Pending Deliveries */}
+      <div>
+        <h3 className="text-sm font-bold text-gray-700 mb-3">Pending Deliveries</h3>
+        {pendingDeliveries.length === 0 ? (
+          <div className="text-center py-8 rounded-xl border border-dashed border-gray-200">
+            <Truck className="w-7 h-7 text-gray-200 mx-auto mb-2" />
+            <p className="text-gray-400 text-sm">No pending deliveries for {country}.</p>
+            <p className="text-xs text-gray-300 mt-1">Batches appear here when added by an admin without a received date.</p>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-gray-200 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  {["Product", "Batch ID", "Qty (t)", "Expiry", ""].map(h => (
+                    <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {pendingDeliveries.map(batch => {
+                  const prod = products.find(p => p.key === batch.productKey);
+                  return (
+                    <tr key={batch.id} className="hover:bg-amber-50/30 transition-colors">
+                      <td className="px-4 py-3 font-medium text-gray-800">
+                        {prod?.name ?? batch.productKey}
+                        <span className="text-xs text-gray-400 ml-1">({batch.productKey})</span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">{batch.batchId || "—"}</td>
+                      <td className="px-4 py-3 tabular-nums font-semibold text-[#2D6A2D]">{(batch.qty ?? 0).toFixed(2)}</td>
+                      <td className="px-4 py-3 text-gray-500">{(() => {
+                        if (batch.expiryDate) return fmtDate(batch.expiryDate);
+                        if (!batch.deliveredAt || !prod?.shelfLifeMonths) return "—";
+                        const base = batch.deliveredAt.toDate?.() ?? batch.deliveredAt;
+                        if (!base) return "—";
+                        const exp = new Date(base);
+                        exp.setMonth(exp.getMonth() + prod.shelfLifeMonths);
+                        return exp.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+                      })()}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          onClick={() => handleMarkReceived(batch)}
+                          disabled={marking === batch.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-60 transition-colors"
+                        >
+                          {marking === batch.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                          Order Received
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 export default function CountryHeadDashboard() {
-  const { currentUser, userProfile } = useAuth();
+  const { currentUser, userProfile, refreshProfile } = useAuth();
+
+  const [activeTab, setActiveTab] = useState("demand");
 
   const [products, setProducts] = useState(DEFAULT_PRODUCTS);
   const [productsLoading, setProductsLoading] = useState(true);
 
   const [productValues, setProductValues] = useState({});
+  const [currentInventory, setCurrentInventory] = useState({});
+  const [desiredInventory, setDesiredInventory] = useState({});
   const [comment, setComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -156,6 +1153,7 @@ export default function CountryHeadDashboard() {
   const [existingDoc, setExistingDoc] = useState(null);
   const [editMode, setEditMode] = useState(false);
   const [infoProduct, setInfoProduct] = useState(null);
+  const [showChangeCountry, setShowChangeCountry] = useState(false);
 
   // Load products from Firestore
   useEffect(() => {
@@ -167,7 +1165,6 @@ export default function CountryHeadDashboard() {
         if (active.length > 0) {
           setProducts(active);
         }
-        // else keep DEFAULT_PRODUCTS
         setProductsLoading(false);
       },
       () => setProductsLoading(false)
@@ -221,28 +1218,51 @@ export default function CountryHeadDashboard() {
       values[p.key] = val;
     }
 
+    // Validate current inventory (mandatory)
+    const cInv = {};
+    for (const p of products) {
+      const val = parseFloat(currentInventory[p.key] ?? "");
+      if (isNaN(val) || val < 0) {
+        setSubmitError("Current inventory is required for all products. Please fill in all current stock levels.");
+        return;
+      }
+      cInv[p.key] = val;
+    }
+
+    // Desired inventory (optional — only save filled values)
+    const dInv = {};
+    for (const p of products) {
+      const val = parseFloat(desiredInventory[p.key] ?? "");
+      if (!isNaN(val) && val >= 0) dInv[p.key] = val;
+    }
+
     setSubmitting(true);
     try {
+      const country = userProfile?.country || "";
+      const payload = {
+        ...values,
+        currentInventory: cInv,
+        desiredInventory: Object.keys(dInv).length > 0 ? dInv : null,
+        comment: comment.trim(),
+        country,
+        submittedAt: serverTimestamp(),
+      };
       if (existingDoc && editMode) {
-        await updateDoc(doc(db, "demands", existingDoc.id), {
-          ...values,
-          comment: comment.trim(),
-          submittedAt: serverTimestamp(),
-        });
+        await updateDoc(doc(db, "demands", existingDoc.id), payload);
       } else if (!existingDoc) {
         await addDoc(collection(db, "demands"), {
           userId: currentUser.uid,
           username: userProfile?.username || "Unknown",
           month: CURRENT_MONTH,
-          ...values,
-          comment: comment.trim(),
-          submittedAt: serverTimestamp(),
+          ...payload,
         });
       }
       setSubmitSuccess(true);
       setEditMode(false);
       if (!existingDoc) {
         setProductValues({});
+        setCurrentInventory({});
+        setDesiredInventory({});
         setComment("");
       }
       setTimeout(() => setSubmitSuccess(false), 4000);
@@ -256,8 +1276,16 @@ export default function CountryHeadDashboard() {
   const startEdit = () => {
     if (existingDoc) {
       const vals = {};
-      products.forEach(p => { vals[p.key] = String(existingDoc[p.key] ?? ""); });
+      const cInvVals = {};
+      const dInvVals = {};
+      products.forEach(p => {
+        vals[p.key] = String(existingDoc[p.key] ?? "");
+        cInvVals[p.key] = String(existingDoc.currentInventory?.[p.key] ?? "");
+        dInvVals[p.key] = String(existingDoc.desiredInventory?.[p.key] ?? "");
+      });
       setProductValues(vals);
+      setCurrentInventory(cInvVals);
+      setDesiredInventory(dInvVals);
       setComment(existingDoc.comment || "");
       setEditMode(true);
       setSubmitSuccess(false);
@@ -267,6 +1295,8 @@ export default function CountryHeadDashboard() {
   const cancelEdit = () => {
     setEditMode(false);
     setProductValues({});
+    setCurrentInventory({});
+    setDesiredInventory({});
     setComment("");
     setSubmitError("");
   };
@@ -293,6 +1323,14 @@ export default function CountryHeadDashboard() {
     );
   }
 
+  const tabs = [
+    { id: "demand", label: "Demand", icon: TrendingUp },
+    { id: "inventory", label: "Inventory", icon: Layers },
+    { id: "calculated_order", label: "Calculated Order", icon: ShoppingCart },
+    { id: "orders", label: "Orders", icon: Truck },
+    { id: "messages", label: "Messages", icon: MessageSquare },
+  ];
+
   return (
     <Layout>
       <div className="space-y-6 max-w-4xl mx-auto">
@@ -303,290 +1341,423 @@ export default function CountryHeadDashboard() {
               <TrendingUp className="w-6 h-6 text-[#F5C500]" />
             </div>
             <div className="flex-1">
-              <h1 className="text-xl font-bold text-gray-900">Demand Submission</h1>
+              <h1 className="text-xl font-bold text-gray-900">
+                {userProfile?.country ? `${userProfile.country} Dashboard` : "Country Head Dashboard"}
+              </h1>
               <p className="text-gray-500 text-sm mt-0.5">
                 {userProfile?.customFunction ? `${userProfile.customFunction} · ` : ""}
                 {CURRENT_MONTH}
               </p>
             </div>
+            <button
+              onClick={() => setShowChangeCountry(true)}
+              title={userProfile?.country ? "Change your country" : "Set your country"}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-[#4A9E4A] hover:text-[#2D6A2D] text-xs font-medium transition-colors"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              {userProfile?.country ? "Change Country" : "Set Country"}
+            </button>
           </div>
         </div>
 
-        {/* Submission Form / Status Card */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <div className="flex items-center gap-2">
-              <Package className="w-4 h-4 text-[#2D6A2D]" />
+        {/* Tab Nav */}
+        <div className="flex gap-2">
+          {tabs.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                activeTab === id
+                  ? "bg-[#2D6A2D] text-white border-[#2D6A2D] shadow-sm"
+                  : "bg-white text-gray-600 border-gray-200 hover:border-[#4A9E4A] hover:text-[#2D6A2D]"
+              }`}
+            >
+              <Icon className="w-4 h-4 shrink-0" />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── Demand Tab ── */}
+        {activeTab === "demand" && (
+          <>
+            {/* Submission Form / Status Card */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <Package className="w-4 h-4 text-[#2D6A2D]" />
+                  <h2 className="text-base font-bold text-gray-800">
+                    Expected Demand — {CURRENT_MONTH}
+                  </h2>
+                </div>
+                {existingDoc && !editMode && (
+                  <button
+                    onClick={startEdit}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:border-[#4A9E4A] hover:text-[#2D6A2D] text-xs font-medium transition-colors"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    Edit Submission
+                  </button>
+                )}
+              </div>
+
+              <div className="p-6">
+                {existingDoc && !editMode ? (
+                  <div>
+                    <div className="flex items-center gap-2 mb-5 p-3 bg-green-50 rounded-xl border border-green-200">
+                      <CheckCircle2 className="w-4 h-4 text-[#2D6A2D] shrink-0" />
+                      <p className="text-sm text-[#2D6A2D] font-medium">
+                        Submission recorded for {CURRENT_MONTH}
+                      </p>
+                    </div>
+                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Expected Demand</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                      {products.map((p) => (
+                        <div key={p.key} className="bg-gray-50 rounded-xl p-4 text-center border border-gray-100">
+                          <div className="flex items-center justify-center gap-1 mb-1">
+                            <p className="text-xs text-gray-500 font-medium">{p.name}</p>
+                            <button type="button" onClick={() => setInfoProduct(p)} title="Product information" className="text-gray-300 hover:text-[#2D6A2D] transition-colors"><Info className="w-3 h-3" /></button>
+                          </div>
+                          <p className="text-2xl font-bold text-[#2D6A2D]">{Number(existingDoc[p.key] || 0).toFixed(2)}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">tons</p>
+                        </div>
+                      ))}
+                    </div>
+                    {existingDoc.currentInventory && (
+                      <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4 mb-4">
+                        <p className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-3">Current Inventory</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {products.map(p => (
+                            <div key={p.key} className="bg-white rounded-lg p-3 text-center border border-blue-100">
+                              <p className="text-xs text-gray-500 mb-1">{p.name}</p>
+                              <p className="text-lg font-bold text-blue-700">{Number(existingDoc.currentInventory[p.key] ?? 0).toFixed(2)}</p>
+                              <p className="text-xs text-gray-400">t</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {existingDoc.desiredInventory && (
+                      <div className="rounded-xl border border-purple-100 bg-purple-50/30 p-4 mb-4">
+                        <p className="text-xs font-bold text-purple-700 uppercase tracking-wider mb-3">Desired Inventory</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          {products.map(p => (
+                            existingDoc.desiredInventory[p.key] != null && (
+                              <div key={p.key} className="bg-white rounded-lg p-3 text-center border border-purple-100">
+                                <p className="text-xs text-gray-500 mb-1">{p.name}</p>
+                                <p className="text-lg font-bold text-purple-700">{Number(existingDoc.desiredInventory[p.key]).toFixed(2)}</p>
+                                <p className="text-xs text-gray-400">t</p>
+                              </div>
+                            )
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {existingDoc.comment && (
+                      <div className="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-100">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <MessageSquare className="w-3.5 h-3.5 text-blue-500" />
+                          <span className="text-xs font-semibold text-blue-600 uppercase tracking-wider">Comment</span>
+                        </div>
+                        <p className="text-sm text-blue-800">{existingDoc.comment}</p>
+                      </div>
+                    )}
+                    {existingDoc.submittedAt?.toDate && (
+                      <p className="text-xs text-gray-400 mt-4 text-right">
+                        Last updated:{" "}
+                        {existingDoc.submittedAt.toDate().toLocaleString("en-US", {
+                          month: "long", day: "numeric", year: "numeric",
+                          hour: "2-digit", minute: "2-digit",
+                        })}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <form onSubmit={handleSubmit} className="space-y-5">
+                    {editMode && (
+                      <div className="flex items-center gap-2 p-3 bg-yellow-50 rounded-xl border border-yellow-200">
+                        <Edit3 className="w-4 h-4 text-yellow-600 shrink-0" />
+                        <p className="text-sm text-yellow-700 font-medium">
+                          Editing submission for {CURRENT_MONTH}. Changes will overwrite your current entry.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Expected Demand */}
+                    <div>
+                      <p className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-2">Expected Demand</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        {products.map((p) => (
+                          <div key={p.key}>
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{p.name}</label>
+                              <button type="button" onClick={() => setInfoProduct(p)} title="Product information" className="text-gray-300 hover:text-[#2D6A2D] transition-colors"><Info className="w-3.5 h-3.5" /></button>
+                            </div>
+                            <div className="relative">
+                              <input type="number" min="0" step="0.01" value={productValues[p.key] || ""} onChange={e => setProductValues(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" required className="w-full px-4 py-3 pr-14 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Current Inventory (mandatory) */}
+                    <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4 space-y-3">
+                      <div>
+                        <p className="text-xs font-bold text-blue-700 uppercase tracking-wider">Current Inventory <span className="text-red-500">*</span></p>
+                        <p className="text-xs text-blue-500 mt-0.5">Stock on hand as of today</p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        {products.map((p) => (
+                          <div key={p.key}>
+                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">{p.name}</label>
+                            <div className="relative">
+                              <input type="number" min="0" step="0.01" value={currentInventory[p.key] ?? ""} onChange={e => setCurrentInventory(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" required className="w-full px-4 py-3 pr-8 rounded-xl border border-blue-200 bg-white text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Desired Inventory (optional) */}
+                    <div className="rounded-xl border border-purple-100 bg-purple-50/30 p-4 space-y-3">
+                      <div>
+                        <p className="text-xs font-bold text-purple-700 uppercase tracking-wider">Desired Inventory <span className="text-gray-400 font-normal normal-case">(optional)</span></p>
+                        <p className="text-xs text-purple-500 mt-0.5">Target stock level</p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        {products.map((p) => (
+                          <div key={p.key}>
+                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">{p.name}</label>
+                            <div className="relative">
+                              <input type="number" min="0" step="0.01" value={desiredInventory[p.key] ?? ""} onChange={e => setDesiredInventory(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" className="w-full px-4 py-3 pr-8 rounded-xl border border-purple-200 bg-white text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                        Comments <span className="font-normal text-gray-400 normal-case">(optional)</span>
+                      </label>
+                      <textarea
+                        value={comment}
+                        onChange={e => setComment(e.target.value)}
+                        placeholder="Add any remarks or context for this forecast..."
+                        rows={3}
+                        className="w-full px-4 py-3 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm resize-none"
+                      />
+                    </div>
+
+                    {submitError && (
+                      <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+                        <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+                        <p className="text-sm text-red-600">{submitError}</p>
+                      </div>
+                    )}
+
+                    {submitSuccess && (
+                      <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl">
+                        <CheckCircle2 className="w-4 h-4 text-[#2D6A2D] shrink-0" />
+                        <p className="text-sm text-[#2D6A2D] font-medium">Demand submitted successfully!</p>
+                      </div>
+                    )}
+
+                    <div className="flex gap-3">
+                      <button
+                        type="submit"
+                        disabled={submitting}
+                        className="flex items-center gap-2 px-6 py-3 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60 shadow-sm"
+                      >
+                        {submitting
+                          ? <Loader2 className="w-4 h-4 animate-spin" />
+                          : editMode ? <Save className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+                        {editMode ? "Save Changes" : "Submit Demand"}
+                      </button>
+
+                      {editMode && (
+                        <button
+                          type="button"
+                          onClick={cancelEdit}
+                          className="flex items-center gap-2 px-5 py-3 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                )}
+              </div>
+            </div>
+
+            {/* Submission History */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <History className="w-4 h-4 text-[#2D6A2D]" />
+                  <h2 className="text-base font-bold text-gray-800">Submission History</h2>
+                </div>
+                {history.length > 0 && (
+                  <div className="flex gap-1 p-1 bg-gray-100 rounded-lg">
+                    <button
+                      onClick={() => setHistoryView("table")}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        historyView === "table"
+                          ? "bg-white text-[#2D6A2D] shadow-sm"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      <Table className="w-3.5 h-3.5" />
+                      Table
+                    </button>
+                    <button
+                      onClick={() => setHistoryView("graph")}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        historyView === "graph"
+                          ? "bg-white text-[#2D6A2D] shadow-sm"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
+                    >
+                      <BarChart2 className="w-3.5 h-3.5" />
+                      Graph
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-6">
+                {historyLoading ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" />
+                  </div>
+                ) : history.length === 0 ? (
+                  <div className="text-center py-8">
+                    <History className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+                    <p className="text-gray-400 text-sm">No submissions yet.</p>
+                  </div>
+                ) : historyView === "graph" ? (
+                  <BarChart
+                    groups={chartGroups}
+                    barColors={productColors}
+                    barLabels={productLabels}
+                    height={140}
+                  />
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-100">
+                          <th className="text-left pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Month</th>
+                          {products.map(p => (
+                            <th key={p.key} className="text-right pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{p.name} (t)</th>
+                          ))}
+                          <th className="text-right pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Total (t)</th>
+                          <th className="text-left pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Submitted</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {history.map(d => {
+                          const total = products.reduce((s, p) => s + (Number(d[p.key]) || 0), 0);
+                          const submittedAt = d.submittedAt?.toDate?.();
+                          const isCurrent = d.month === CURRENT_MONTH;
+                          return (
+                            <tr key={d.id} className={`hover:bg-gray-50 transition-colors ${isCurrent ? "bg-green-50/50" : ""}`}>
+                              <td className="py-3 pr-4">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-gray-800">{d.month}</span>
+                                  {isCurrent && (
+                                    <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-[#2D6A2D] text-white">
+                                      Current
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              {products.map(p => (
+                                <td key={p.key} className="py-3 text-right tabular-nums text-gray-700">{Number(d[p.key] || 0).toFixed(2)}</td>
+                              ))}
+                              <td className="py-3 text-right tabular-nums font-semibold text-[#2D6A2D]">{total.toFixed(2)}</td>
+                              <td className="py-3 text-xs text-gray-400">
+                                {submittedAt
+                                  ? submittedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                                  : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Inventory Tab ── */}
+        {activeTab === "inventory" && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <div className="flex items-center gap-2 mb-5">
+              <Layers className="w-4 h-4 text-[#2D6A2D]" />
               <h2 className="text-base font-bold text-gray-800">
-                Expected Demand — {CURRENT_MONTH}
+                Inventory — {userProfile?.country || "Your Country"}
               </h2>
             </div>
-            {existingDoc && !editMode && (
-              <button
-                onClick={startEdit}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:border-[#4A9E4A] hover:text-[#2D6A2D] text-xs font-medium transition-colors"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                Edit Submission
-              </button>
-            )}
+            <CountryInventoryTab userProfile={userProfile} products={products} />
           </div>
+        )}
 
-          <div className="p-6">
-            {existingDoc && !editMode ? (
-              <div>
-                <div className="flex items-center gap-2 mb-5 p-3 bg-green-50 rounded-xl border border-green-200">
-                  <CheckCircle2 className="w-4 h-4 text-[#2D6A2D] shrink-0" />
-                  <p className="text-sm text-[#2D6A2D] font-medium">
-                    Submission recorded for {CURRENT_MONTH}
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {products.map((p) => (
-                    <div key={p.key} className="bg-gray-50 rounded-xl p-4 text-center border border-gray-100">
-                      <div className="flex items-center justify-center gap-1 mb-1">
-                        <p className="text-xs text-gray-500 font-medium">{p.name}</p>
-                        <button
-                          type="button"
-                          onClick={() => setInfoProduct(p)}
-                          title="Product information"
-                          className="text-gray-300 hover:text-[#2D6A2D] transition-colors"
-                        >
-                          <Info className="w-3 h-3" />
-                        </button>
-                      </div>
-                      <p className="text-2xl font-bold text-[#2D6A2D]">{Number(existingDoc[p.key] || 0).toFixed(2)}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">tons</p>
-                    </div>
-                  ))}
-                </div>
-                {existingDoc.comment && (
-                  <div className="mt-4 p-3 bg-blue-50 rounded-xl border border-blue-100">
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <MessageSquare className="w-3.5 h-3.5 text-blue-500" />
-                      <span className="text-xs font-semibold text-blue-600 uppercase tracking-wider">Comment</span>
-                    </div>
-                    <p className="text-sm text-blue-800">{existingDoc.comment}</p>
-                  </div>
-                )}
-                {existingDoc.submittedAt?.toDate && (
-                  <p className="text-xs text-gray-400 mt-4 text-right">
-                    Last updated:{" "}
-                    {existingDoc.submittedAt.toDate().toLocaleString("en-US", {
-                      month: "long", day: "numeric", year: "numeric",
-                      hour: "2-digit", minute: "2-digit",
-                    })}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <form onSubmit={handleSubmit} className="space-y-5">
-                {editMode && (
-                  <div className="flex items-center gap-2 p-3 bg-yellow-50 rounded-xl border border-yellow-200">
-                    <Edit3 className="w-4 h-4 text-yellow-600 shrink-0" />
-                    <p className="text-sm text-yellow-700 font-medium">
-                      Editing submission for {CURRENT_MONTH}. Changes will overwrite your current entry.
-                    </p>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-                  {products.map((p) => (
-                    <div key={p.key}>
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                          {p.name}
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => setInfoProduct(p)}
-                          title="Product information"
-                          className="text-gray-300 hover:text-[#2D6A2D] transition-colors"
-                        >
-                          <Info className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={productValues[p.key] || ""}
-                          onChange={e => setProductValues(prev => ({ ...prev, [p.key]: e.target.value }))}
-                          placeholder="0.00"
-                          required
-                          className="w-full px-4 py-3 pr-14 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">
-                          tons
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Optional comment */}
-                <div>
-                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
-                    Comments <span className="font-normal text-gray-400 normal-case">(optional)</span>
-                  </label>
-                  <textarea
-                    value={comment}
-                    onChange={e => setComment(e.target.value)}
-                    placeholder="Add any remarks or context for this forecast..."
-                    rows={3}
-                    className="w-full px-4 py-3 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm resize-none"
-                  />
-                </div>
-
-                {submitError && (
-                  <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
-                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
-                    <p className="text-sm text-red-600">{submitError}</p>
-                  </div>
-                )}
-
-                {submitSuccess && (
-                  <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-xl">
-                    <CheckCircle2 className="w-4 h-4 text-[#2D6A2D] shrink-0" />
-                    <p className="text-sm text-[#2D6A2D] font-medium">Demand submitted successfully!</p>
-                  </div>
-                )}
-
-                <div className="flex gap-3">
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="flex items-center gap-2 px-6 py-3 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60 shadow-sm"
-                  >
-                    {submitting
-                      ? <Loader2 className="w-4 h-4 animate-spin" />
-                      : editMode ? <Save className="w-4 h-4" /> : <Send className="w-4 h-4" />}
-                    {editMode ? "Save Changes" : "Submit Demand"}
-                  </button>
-
-                  {editMode && (
-                    <button
-                      type="button"
-                      onClick={cancelEdit}
-                      className="flex items-center gap-2 px-5 py-3 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 text-sm font-medium transition-colors"
-                    >
-                      <X className="w-4 h-4" />
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-
-        {/* Submission History */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-            <div className="flex items-center gap-2">
-              <History className="w-4 h-4 text-[#2D6A2D]" />
-              <h2 className="text-base font-bold text-gray-800">Submission History</h2>
+        {/* ── Orders Tab ── */}
+        {activeTab === "orders" && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <div className="flex items-center gap-2 mb-5">
+              <Truck className="w-4 h-4 text-[#2D6A2D]" />
+              <h2 className="text-base font-bold text-gray-800">My Orders</h2>
             </div>
-            {history.length > 0 && (
-              <div className="flex gap-1 p-1 bg-gray-100 rounded-lg">
-                <button
-                  onClick={() => setHistoryView("table")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    historyView === "table"
-                      ? "bg-white text-[#2D6A2D] shadow-sm"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  <Table className="w-3.5 h-3.5" />
-                  Table
-                </button>
-                <button
-                  onClick={() => setHistoryView("graph")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                    historyView === "graph"
-                      ? "bg-white text-[#2D6A2D] shadow-sm"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  <BarChart2 className="w-3.5 h-3.5" />
-                  Graph
-                </button>
-              </div>
-            )}
+            <CountryOrdersTab userProfile={userProfile} products={products} />
           </div>
+        )}
 
-          <div className="p-6">
-            {historyLoading ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" />
-              </div>
-            ) : history.length === 0 ? (
-              <div className="text-center py-8">
-                <History className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-                <p className="text-gray-400 text-sm">No submissions yet.</p>
-              </div>
-            ) : historyView === "graph" ? (
-              <BarChart
-                groups={chartGroups}
-                barColors={productColors}
-                barLabels={productLabels}
-                height={140}
-              />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-100">
-                      <th className="text-left pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Month</th>
-                      {products.map(p => (
-                        <th key={p.key} className="text-right pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{p.name} (t)</th>
-                      ))}
-                      <th className="text-right pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Total (t)</th>
-                      <th className="text-left pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Submitted</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {history.map(d => {
-                      const total = products.reduce((s, p) => s + (Number(d[p.key]) || 0), 0);
-                      const submittedAt = d.submittedAt?.toDate?.();
-                      const isCurrent = d.month === CURRENT_MONTH;
-                      return (
-                        <tr key={d.id} className={`hover:bg-gray-50 transition-colors ${isCurrent ? "bg-green-50/50" : ""}`}>
-                          <td className="py-3 pr-4">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-gray-800">{d.month}</span>
-                              {isCurrent && (
-                                <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-[#2D6A2D] text-white">
-                                  Current
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          {products.map(p => (
-                            <td key={p.key} className="py-3 text-right tabular-nums text-gray-700">{Number(d[p.key] || 0).toFixed(2)}</td>
-                          ))}
-                          <td className="py-3 text-right tabular-nums font-semibold text-[#2D6A2D]">{total.toFixed(2)}</td>
-                          <td className="py-3 text-xs text-gray-400">
-                            {submittedAt
-                              ? submittedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-                              : "—"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+        {/* ── Calculated Order Tab ── */}
+        {activeTab === "calculated_order" && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <div className="flex items-center gap-2 mb-5">
+              <ShoppingCart className="w-4 h-4 text-[#2D6A2D]" />
+              <h2 className="text-base font-bold text-gray-800">Calculated Order</h2>
+            </div>
+            <CalculatedOrderTab userProfile={userProfile} products={products} />
           </div>
-        </div>
+        )}
+
+        {/* ── Messages Tab ── */}
+        {activeTab === "messages" && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <div className="flex items-center gap-2 mb-5">
+              <MessageSquare className="w-4 h-4 text-[#2D6A2D]" />
+              <h2 className="text-base font-bold text-gray-800">Messages from Admin</h2>
+            </div>
+            <MessagesTab userProfile={userProfile} />
+          </div>
+        )}
       </div>
 
       {infoProduct && (
         <ProductInfoViewModal
           product={infoProduct}
           onClose={() => setInfoProduct(null)}
+        />
+      )}
+
+      {showChangeCountry && currentUser && (
+        <ChangeCountryModal
+          userId={currentUser.uid}
+          currentCountry={userProfile?.country}
+          onClose={() => setShowChangeCountry(false)}
+          onSaved={() => { setShowChangeCountry(false); refreshProfile?.(); }}
         />
       )}
     </Layout>
