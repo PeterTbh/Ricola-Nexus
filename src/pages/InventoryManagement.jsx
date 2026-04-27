@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import {
   collection, query, onSnapshot, addDoc, updateDoc,
   deleteDoc, doc, serverTimestamp, orderBy, Timestamp, where
@@ -604,33 +604,105 @@ function AddBatchModal({ products, onClose }) {
   );
 }
 
+// ─── Edit Submission Modal ────────────────────────────────────────────────────
+function EditSubmissionModal({ demand, productKey, productName, qty, onClose }) {
+  const existing = demand?.currentInventoryExpiry?.[productKey];
+  const [expiryDate, setExpiryDate] = useState(
+    existing ? (() => { const d = existing.toDate?.(); return d ? d.toISOString().split("T")[0] : ""; })() : ""
+  );
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const expiry = expiryDate ? Timestamp.fromDate(new Date(expiryDate + "T00:00:00")) : null;
+      await updateDoc(doc(db, "demands", demand.id), {
+        [`currentInventoryExpiry.${productKey}`]: expiry,
+      });
+      onClose();
+    } catch (e) { console.error(e); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="font-bold text-gray-900 text-sm">Edit Manual Submission</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="space-y-4">
+          <div className="p-3 bg-blue-50 rounded-xl">
+            <p className="text-xs text-blue-600 font-semibold">{productName}</p>
+            <p className="text-xs text-blue-400 mt-0.5">Submitted quantity: {qty.toFixed(2)} t</p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Expiry Date</label>
+            <input
+              type="date"
+              value={expiryDate}
+              onChange={e => setExpiryDate(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-1 focus:ring-[#4A9E4A]"
+            />
+            <p className="text-xs text-gray-400 mt-1">Leave empty to remove expiry date.</p>
+          </div>
+        </div>
+        <div className="flex gap-3 mt-5">
+          <button onClick={onClose} disabled={saving} className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 disabled:opacity-60">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-60">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Stock Levels Tab ─────────────────────────────────────────────────────────
-function StockLevelsTab({ items, products, loading }) {
+function StockLevelsTab({ items, products, loading, demands }) {
   const [sortBy, setSortBy] = useState("country");
   const [expandedKey, setExpandedKey] = useState(null);
   const [shelfLifeTarget, setShelfLifeTarget] = useState(null);
   const [editTarget, setEditTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [editSubmission, setEditSubmission] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [showFormat, setShowFormat] = useState(false);
 
   const productMap = Object.fromEntries(products.map(p => [p.key, p]));
 
-  // Build summary rows: one per (entity, productKey), current batches only
+  // Build summary rows: one per (entity, productKey)
+  // Sources: inventory collection batches (levelType=current) + demand.currentInventory submissions
   const summaryMap = {};
   for (const item of items) {
     if (item.levelType && item.levelType !== "current") continue;
     const key = `${item.entity}||${item.productKey}`;
     if (!summaryMap[key]) {
-      summaryMap[key] = { entity: item.entity, productKey: item.productKey, currentBatches: [] };
+      summaryMap[key] = { entity: item.entity, productKey: item.productKey, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null };
     }
     summaryMap[key].currentBatches.push(item);
+  }
+  // Merge in demand-submitted current inventory (manual submissions)
+  for (const demand of (demands || [])) {
+    const country = demand.country;
+    if (!country || !demand.currentInventory) continue;
+    for (const [pk, qty] of Object.entries(demand.currentInventory)) {
+      if (!qty) continue;
+      const key = `${country}||${pk}`;
+      if (!summaryMap[key]) {
+        summaryMap[key] = { entity: country, productKey: pk, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null };
+      }
+      summaryMap[key].submittedQty += Number(qty) || 0;
+      summaryMap[key].demandDoc = demand;
+      summaryMap[key].submittedExpiry = demand.currentInventoryExpiry?.[pk] ?? null;
+    }
   }
 
   let rows = Object.values(summaryMap).map(r => ({
     ...r,
-    currentQty: r.currentBatches.reduce((s, b) => s + (b.qty || 0), 0),
+    currentQty: r.currentBatches.reduce((s, b) => s + (b.qty || 0), 0) + r.submittedQty,
     productName: productMap[r.productKey]?.name ?? r.productKey,
   }));
 
@@ -722,10 +794,10 @@ function StockLevelsTab({ items, products, loading }) {
                             </div>
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums font-semibold text-[#2D6A2D]">
-                            {row.currentBatches.length > 0 ? row.currentQty.toFixed(2) : <span className="text-gray-300">—</span>}
+                            {row.currentQty > 0 ? row.currentQty.toFixed(2) : <span className="text-gray-300">—</span>}
                           </td>
                           <td className="px-4 py-3 text-right text-xs text-gray-400">
-                            {row.currentBatches.length}
+                            {row.currentBatches.length + (row.submittedQty > 0 ? 1 : 0)}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1 justify-end">
@@ -759,6 +831,25 @@ function StockLevelsTab({ items, products, loading }) {
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-gray-50">
+                                    {row.submittedQty > 0 && (
+                                      <tr className="bg-blue-50/40">
+                                        <td className="px-3 py-2 text-blue-600 font-medium italic">Manual submission</td>
+                                        <td className="px-3 py-2 tabular-nums font-semibold text-blue-700">{row.submittedQty.toFixed(2)}</td>
+                                        <td className="px-3 py-2 text-gray-500">{row.submittedExpiry ? fmtDate(row.submittedExpiry) : <span className="text-gray-300">—</span>}</td>
+                                        <td className="px-3 py-2 text-blue-400 text-xs">Country head</td>
+                                        <td className="px-3 py-2">
+                                          {row.demandDoc && (
+                                            <button
+                                              onClick={() => setEditSubmission({ demand: row.demandDoc, productKey: row.productKey, productName: row.productName, qty: row.submittedQty })}
+                                              className="p-1 rounded text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                                              title="Edit submission"
+                                            >
+                                              <Pencil className="w-3 h-3" />
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    )}
                                     {row.currentBatches.map(b => (
                                       <tr key={b.id} className="hover:bg-white">
                                         <td className="px-3 py-2 text-gray-600">{b.batchId || "—"}</td>
@@ -799,6 +890,15 @@ function StockLevelsTab({ items, products, loading }) {
       )}
       {editTarget && <EditBatchModal item={editTarget} onClose={() => setEditTarget(null)} />}
       {deleteTarget && <DeleteInventoryModal item={deleteTarget} onClose={() => setDeleteTarget(null)} />}
+      {editSubmission && (
+        <EditSubmissionModal
+          demand={editSubmission.demand}
+          productKey={editSubmission.productKey}
+          productName={editSubmission.productName}
+          qty={editSubmission.qty}
+          onClose={() => setEditSubmission(null)}
+        />
+      )}
       {showAdd && <AddBatchModal products={products} onClose={() => setShowAdd(false)} />}
       {showUpload && <UploadInventoryModal onClose={() => setShowUpload(false)} />}
       {showFormat && <InventoryFormatModal onClose={() => setShowFormat(false)} />}
@@ -812,13 +912,23 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
   const CURRENT_MONTH = `${MONTHS_LIST[new Date().getMonth()]} ${new Date().getFullYear()}`;
   const productMap = Object.fromEntries(products.map(p => [p.key, p]));
 
-  // Current inventory per (entity, productKey) — same as Stock Levels tab
+  // Current inventory per (entity, productKey) — inventory batches + demand submissions
   const summaryMap = {};
   for (const item of items) {
     if (item.levelType && item.levelType !== "current") continue;
     const key = `${item.entity}||${item.productKey}`;
     if (!summaryMap[key]) summaryMap[key] = { entity: item.entity, productKey: item.productKey, currentQty: 0 };
     summaryMap[key].currentQty += (item.qty || 0);
+  }
+  // Also add entries for countries that only submitted via demand (no inventory batches)
+  for (const demand of demands) {
+    const country = demand.country;
+    if (!country || !demand.currentInventory) continue;
+    for (const [pk, qty] of Object.entries(demand.currentInventory)) {
+      if (!qty) continue;
+      const key = `${country}||${pk}`;
+      if (!summaryMap[key]) summaryMap[key] = { entity: country, productKey: pk, currentQty: 0 };
+    }
   }
 
   const rows = Object.values(summaryMap).map(r => {
@@ -834,18 +944,23 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
       m.toUserId === demand.userId &&
       (m.status === "resolved" || m.status === "admin_resolved")
     ) : null;
+    // Current inventory: inventory batches + submitted current from demand
+    const submittedCurrent = demand?.currentInventory?.[r.productKey] ?? 0;
+    const currentQty = submittedCurrent + r.currentQty; // r.currentQty = received order batches
     const expectedDemand = resolvedMsg
       ? (resolvedMsg.resolvedQty ?? 0)
       : demand ? (Number(demand[r.productKey]) || 0) : 0;
+    const desiredManual = demand?.desiredInventory?.[r.productKey] ?? null;
 
     return {
       entity: r.entity,
       productKey: r.productKey,
       productName: productMap[r.productKey]?.name ?? r.productKey,
-      currentQty: r.currentQty,
+      currentQty,
       expectedDemand,
-      safetyStock: r.currentQty - expectedDemand,
+      safetyStock: currentQty - expectedDemand,
       hasResolved: !!resolvedMsg,
+      desiredManual,
     };
   });
 
@@ -884,6 +999,7 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
                 <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Current (t)</th>
                 <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Demand (t)</th>
                 <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Safety Stock (t)</th>
+                <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Desired (t)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -902,6 +1018,9 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
                   <td className="px-4 py-3 text-right tabular-nums text-gray-600">{row.expectedDemand.toFixed(2)}</td>
                   <td className={`px-4 py-3 text-right tabular-nums font-bold text-lg ${row.safetyStock < 0 ? "text-red-600" : "text-[#2D6A2D]"}`}>
                     {row.safetyStock.toFixed(2)}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums font-semibold text-purple-700">
+                    {row.desiredManual != null ? row.desiredManual.toFixed(2) : <span className="text-gray-300">—</span>}
                   </td>
                 </tr>
               ))}
@@ -971,7 +1090,7 @@ export default function InventoryManagement() {
       </div>
 
       {activeTab === "stock" && (
-        <StockLevelsTab items={items} products={products} loading={loading} />
+        <StockLevelsTab items={items} products={products} loading={loading} demands={demands} />
       )}
       {activeTab === "safety" && (
         <EstimatedSafetyStockTab items={items} products={products} demands={demands} messages={messages} />

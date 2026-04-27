@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import {
   collection, query, where, doc, updateDoc,
   deleteDoc, onSnapshot, orderBy, getDocs, serverTimestamp,
@@ -2481,6 +2481,22 @@ function AdminResolveModal({ discrepancy, onClose }) {
           ...baseData,
         });
       }
+      // Update the demand document with the resolved value and attach a note
+      if (discrepancy.demandUserId && discrepancy.period) {
+        const demandsSnap = await getDocs(query(
+          collection(db, "demands"),
+          where("userId", "==", discrepancy.demandUserId),
+          where("month", "==", discrepancy.period)
+        ));
+        if (!demandsSnap.empty) {
+          const demandDoc = demandsSnap.docs[0];
+          const originalQty = demandDoc.data()[discrepancy.productKey];
+          await updateDoc(doc(db, "demands", demandDoc.id), {
+            [discrepancy.productKey]: resolvedQty,
+            [`adminNote_${discrepancy.productKey}`]: `Admin resolved (${discrepancy.period}): original ${(originalQty ?? 0).toFixed(2)} t → ${resolvedQty.toFixed(2)} t`,
+          });
+        }
+      }
       onClose();
     } catch (e) {
       console.error(e);
@@ -3358,6 +3374,9 @@ function OrdersSection() {
   const [activeMrp, setActiveMrp] = useState(null);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState("open"); // "open" | "all"
+  const [summaryMode, setSummaryMode] = useState("month"); // "month" | "year"
+  const [summaryMonth, setSummaryMonth] = useState(null); // null = current month
+  const [expandedProduct, setExpandedProduct] = useState(null); // productKey | null
   const [createTarget, setCreateTarget] = useState(null); // country string
   const [editingOrder, setEditingOrder] = useState(null); // order id
   const [editQtys, setEditQtys] = useState({});
@@ -3500,7 +3519,7 @@ function OrdersSection() {
         <div className="flex gap-1 p-1 bg-gray-100 rounded-xl">
           <button onClick={() => setView("open")} className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${view === "open" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Open Orders</button>
           <button onClick={() => setView("all")} className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${view === "all" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-            All Orders
+            Orders Placed
             {newReceiptCount > 0 && <span className="px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 font-bold text-xs">{newReceiptCount}</span>}
           </button>
         </div>
@@ -3529,15 +3548,69 @@ function OrdersSection() {
                     const cIds = users.filter(u => u.country === c).map(u => u.id);
                     return demands.some(d => d.month === CURRENT_MONTH_ORD && (cIds.includes(d.userId) || (d.country || "").trim().toLowerCase() === c.trim().toLowerCase()));
                   }).length;
+                  const isExpanded = expandedProduct === p.key;
                   return (
-                    <tr key={p.key} className="bg-white">
-                      <td className="px-4 py-2.5 font-medium text-gray-800">{p.name}</td>
-                      <td className="px-4 py-2.5">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${p.type === "FG" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>{p.type || "HF"}</span>
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-500 text-xs">{countriesWithDemand} / {countries.length}</td>
-                      <td className="px-4 py-2.5 tabular-nums font-bold text-[#2D6A2D]">{totalCalc.toFixed(2)} t</td>
-                    </tr>
+                    <Fragment key={p.key}>
+                      <tr
+                        className="bg-white hover:bg-gray-50 cursor-pointer select-none"
+                        onClick={() => setExpandedProduct(isExpanded ? null : p.key)}
+                      >
+                        <td className="px-4 py-2.5 font-medium text-gray-800">
+                          <div className="flex items-center gap-1.5">
+                            {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+                            {p.name}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${p.type === "FG" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>{p.type || "HF"}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-gray-500 text-xs">{countriesWithDemand} / {countries.length}</td>
+                        <td className="px-4 py-2.5 tabular-nums font-bold text-[#2D6A2D]">{totalCalc.toFixed(2)} t</td>
+                      </tr>
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={4} className="bg-gray-50 px-4 pb-3 pt-0">
+                            <div className="rounded-xl border border-gray-100 overflow-hidden mt-2">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="bg-white border-b border-gray-100">
+                                    {["Country", "Demand Submitted", "Calc. Qty (t)", "Order Status"].map(h => (
+                                      <th key={h} className="text-left px-3 py-2 font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-50">
+                                  {countries.map(country => {
+                                    const cIds = users.filter(u => u.country === country).map(u => u.id);
+                                    const hasDemand = demands.some(d =>
+                                      d.month === CURRENT_MONTH_ORD && (cIds.includes(d.userId) || (d.country || "").trim().toLowerCase() === country.trim().toLowerCase())
+                                    );
+                                    const calcQty = computeCalcQty(country, p.key);
+                                    const hasOpen = orders.some(o => o.country === country && o.status === "open");
+                                    return (
+                                      <tr key={country} className="hover:bg-white">
+                                        <td className="px-3 py-2 font-medium text-gray-700">{country}</td>
+                                        <td className="px-3 py-2">
+                                          {hasDemand
+                                            ? <span className="px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 font-semibold">Yes</span>
+                                            : <span className="text-gray-400">—</span>}
+                                        </td>
+                                        <td className="px-3 py-2 tabular-nums font-semibold text-[#2D6A2D]">{calcQty.toFixed(2)}</td>
+                                        <td className="px-3 py-2">
+                                          {hasOpen
+                                            ? <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold">Open order</span>
+                                            : <span className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500 font-semibold">Not placed</span>}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -3584,44 +3657,85 @@ function OrdersSection() {
         </div>
       )}
 
-      {/* All Orders: aggregated ordered summary */}
-      {view === "all" && products.length > 0 && orders.length > 0 && (
-        <div className="rounded-xl border border-gray-200 overflow-hidden">
-          <div className="bg-gray-50 border-b border-gray-200 px-4 py-2.5">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Order Summary — All Time</p>
-            <p className="text-xs text-gray-400 mt-0.5">Total quantities across all orders, split by status</p>
+      {/* All Orders: aggregated ordered summary by month or full year */}
+      {view === "all" && products.length > 0 && orders.length > 0 && (() => {
+        const currentYear = new Date().getFullYear();
+        const allPeriods = [...new Set(orders.map(o => o.period).filter(Boolean))].sort((a, b) => {
+          const parseP = s => { const [m, y] = s.split(" "); return new Date(`${m} 1, ${y}`); };
+          return parseP(a) - parseP(b);
+        });
+        const activeSummaryMonth = summaryMonth ?? CURRENT_MONTH_ORD;
+        const filteredOrders = summaryMode === "year"
+          ? orders.filter(o => o.period?.endsWith(String(currentYear)))
+          : orders.filter(o => o.period === activeSummaryMonth);
+        const summaryLabel = summaryMode === "year"
+          ? `Full Year ${currentYear}`
+          : activeSummaryMonth;
+        return (
+          <div className="rounded-xl border border-gray-200 overflow-hidden">
+            <div className="bg-gray-50 border-b border-gray-200 px-4 py-2.5 flex flex-wrap items-center gap-3">
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Order Summary — {summaryLabel}</p>
+                <p className="text-xs text-gray-400 mt-0.5">Total quantities across all countries per product</p>
+              </div>
+              <div className="flex items-center gap-2 ml-auto">
+                <div className="flex gap-1 p-0.5 bg-gray-200 rounded-lg">
+                  <button
+                    onClick={() => setSummaryMode("month")}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${summaryMode === "month" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                  >By Month</button>
+                  <button
+                    onClick={() => setSummaryMode("year")}
+                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${summaryMode === "year" ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                  >Full Year</button>
+                </div>
+                {summaryMode === "month" && (
+                  <select
+                    value={activeSummaryMonth}
+                    onChange={e => setSummaryMonth(e.target.value)}
+                    className="px-2 py-1 text-xs rounded-lg border border-gray-200 bg-white focus:outline-none focus:ring-1 focus:ring-[#4A9E4A]"
+                  >
+                    {allPeriods.length > 0 ? allPeriods.map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    )) : (
+                      <option value={CURRENT_MONTH_ORD}>{CURRENT_MONTH_ORD}</option>
+                    )}
+                  </select>
+                )}
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    {["Product","Type","Total Ordered (t)","Open (t)","Received (t)"].map(h => (
+                      <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {products.map(p => {
+                    const sumAll = filteredOrders.reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
+                    const sumOpen = filteredOrders.filter(o => o.status === "open").reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
+                    const sumReceived = filteredOrders.filter(o => o.status === "received").reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
+                    return (
+                      <tr key={p.key} className="bg-white">
+                        <td className="px-4 py-2.5 font-medium text-gray-800">{p.name}</td>
+                        <td className="px-4 py-2.5">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${p.type === "FG" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>{p.type || "HF"}</span>
+                        </td>
+                        <td className="px-4 py-2.5 tabular-nums font-bold text-gray-800">{sumAll.toFixed(2)}</td>
+                        <td className="px-4 py-2.5 tabular-nums text-amber-700 font-semibold">{sumOpen.toFixed(2)}</td>
+                        <td className="px-4 py-2.5 tabular-nums text-green-700 font-semibold">{sumReceived.toFixed(2)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100">
-                  {["Product","Type","Total Ordered (t)","Open (t)","Received (t)"].map(h => (
-                    <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {products.map(p => {
-                  const sumAll = orders.reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
-                  const sumOpen = orders.filter(o => o.status === "open").reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
-                  const sumReceived = orders.filter(o => o.status === "received").reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
-                  return (
-                    <tr key={p.key} className="bg-white">
-                      <td className="px-4 py-2.5 font-medium text-gray-800">{p.name}</td>
-                      <td className="px-4 py-2.5">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${p.type === "FG" ? "bg-purple-100 text-purple-700" : "bg-blue-100 text-blue-700"}`}>{p.type || "HF"}</span>
-                      </td>
-                      <td className="px-4 py-2.5 tabular-nums font-bold text-gray-800">{sumAll.toFixed(2)}</td>
-                      <td className="px-4 py-2.5 tabular-nums text-amber-700 font-semibold">{sumOpen.toFixed(2)}</td>
-                      <td className="px-4 py-2.5 tabular-nums text-green-700 font-semibold">{sumReceived.toFixed(2)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Orders list */}
       {ordersToShow.length === 0 ? (

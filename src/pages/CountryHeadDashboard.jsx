@@ -42,6 +42,16 @@ function parseMonthToDate(monthStr) {
   return new Date(Number(year), MONTHS.indexOf(name), 1);
 }
 
+function generateMonthOptions(historyMonths = []) {
+  const set = new Set(historyMonths.filter(Boolean));
+  const now = new Date();
+  for (let i = -6; i <= 3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    set.add(`${MONTHS[d.getMonth()]} ${d.getFullYear()}`);
+  }
+  return [...set].sort((a, b) => parseMonthToDate(a) - parseMonthToDate(b));
+}
+
 // ─── Simple bar chart ──────────────────────────────────────────────────────────
 function BarChart({ groups, barColors, barLabels, height = 140 }) {
   const maxVal = Math.max(...groups.flatMap(g => g.values), 0.01);
@@ -282,26 +292,50 @@ function ProductInfoViewModal({ product, onClose }) {
 function CountryInventoryTab({ userProfile, products }) {
   const { currentUser } = useAuth();
   const [inventory, setInventory] = useState([]);
+  const [demands, setDemands] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [activeMrp, setActiveMrp] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [subTab, setSubTab] = useState("stock");
   const [expandedProduct, setExpandedProduct] = useState(null);
   const [marking, setMarking] = useState(null);
 
   const country = userProfile?.country || "";
+  const MONTH = currentMonthStr();
 
   useEffect(() => {
     if (!country) { setLoading(false); return; }
-    const q = query(collection(db, "inventory"), where("entity", "==", country));
-    return onSnapshot(q, snap => {
+    return onSnapshot(query(collection(db, "inventory"), where("entity", "==", country)), snap => {
       setInventory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
       setLoading(false);
     }, () => setLoading(false));
   }, [country]);
 
-  const fmtDate = (ts) => {
-    if (!ts) return "—";
-    const d = ts.toDate?.();
+  useEffect(() => {
+    if (!currentUser) return;
+    return onSnapshot(query(collection(db, "demands"), where("userId", "==", currentUser.uid)), snap => {
+      setDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    return onSnapshot(query(collection(db, "messages"), where("toUserId", "==", currentUser.uid)), snap => {
+      setMessages(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [currentUser]);
+
+  useEffect(() => {
+    return onSnapshot(query(collection(db, "mrpImports"), where("isActive", "==", true)), snap => {
+      setActiveMrp(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
+    });
+  }, []);
+
+  const fmtDate = (d) => {
     if (!d) return "—";
-    return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+    const dt = d.toDate?.() ?? (d instanceof Date ? d : null);
+    if (!dt) return "—";
+    return dt.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
   };
 
   const fmtDateTime = (ts) => {
@@ -309,6 +343,15 @@ function CountryInventoryTab({ userProfile, products }) {
     const d = ts.toDate?.();
     if (!d) return "—";
     return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+
+  const getComputedExpiry = (batch, shelfLifeMonths) => {
+    if (batch.expiryDate) return batch.expiryDate.toDate?.() ?? null;
+    if (batch.deliveredAt && shelfLifeMonths) {
+      const base = batch.deliveredAt.toDate?.() ?? null;
+      if (base) { const exp = new Date(base); exp.setMonth(exp.getMonth() + shelfLifeMonths); return exp; }
+    }
+    return null;
   };
 
   const handleMarkDelivered = async (item) => {
@@ -322,146 +365,211 @@ function CountryInventoryTab({ userProfile, products }) {
     finally { setMarking(null); }
   };
 
-  // Group current inventory by productKey (exclude desired)
-  const currentItems = inventory.filter(i => !i.levelType || i.levelType === "current");
-  const productMap = {};
-  for (const p of products) {
-    const batches = currentItems.filter(i => i.productKey === p.key);
-    if (batches.length === 0) continue;
-    const totalQty = batches.reduce((s, b) => s + (b.qty || 0), 0);
-    const expiries = batches.map(b => b.expiryDate?.toDate?.()).filter(Boolean);
+  const currentDemand = demands.find(d => d.month === MONTH);
+
+  const getExpectedDemand = (productKey) => {
+    const resolvedMsg = messages.find(m =>
+      !m.type && m.productKey === productKey && m.period === MONTH &&
+      (m.status === "resolved" || m.status === "admin_resolved")
+    );
+    if (resolvedMsg) return { qty: resolvedMsg.resolvedQty ?? 0, source: "resolved" };
+    if (currentDemand?.[productKey] != null) return { qty: Number(currentDemand[productKey]) || 0, source: "submitted" };
+    if (activeMrp?.rows) {
+      const row = activeMrp.rows.find(r => r.productKey === productKey && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
+      if (row) return { qty: parseFloat(row.suggestedQty) || 0, source: "mrp" };
+    }
+    return { qty: 0, source: "none" };
+  };
+
+  const currentBatchItems = inventory.filter(i => !i.levelType || i.levelType === "current");
+
+  const productGroups = products.map(p => {
+    const batches = currentBatchItems.filter(i => i.productKey === p.key);
+    const receivedOrderQty = batches.filter(b => b.source === "order" && b.deliveredAt).reduce((s, b) => s + (b.qty || 0), 0);
+    const submittedCurrentQty = currentDemand?.currentInventory?.[p.key] ?? null;
+    const totalCurrentQty = (submittedCurrentQty ?? 0) + receivedOrderQty;
+
+    const expiries = batches.map(b => getComputedExpiry(b, p.shelfLifeMonths)).filter(Boolean);
     const earliestExpiry = expiries.length > 0 ? expiries.reduce((min, d) => d < min ? d : min) : null;
 
-    // Desired levels
-    const desiredManual = inventory.filter(i => i.productKey === p.key && i.levelType === "desired" && i.source !== "mrp");
-    const desiredMrp = inventory.filter(i => i.productKey === p.key && i.levelType === "desired" && i.source === "mrp");
+    const desiredManual = currentDemand?.desiredInventory?.[p.key] ?? null;
+    const desiredMrpRow = activeMrp?.rows?.find(r => r.productKey === p.key && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
+    const desiredMrp = desiredMrpRow?.desiredQty != null ? parseFloat(desiredMrpRow.desiredQty) : null;
 
-    // Carry-forward: use most recent desired if no current-month desired exists
-    const latestDesiredManual = desiredManual.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0))[0];
-    const latestDesiredMrp = desiredMrp.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0))[0];
+    const { qty: expectedDemandQty, source: demandSource } = getExpectedDemand(p.key);
+    const safetyStock = totalCurrentQty - expectedDemandQty;
 
-    productMap[p.key] = { product: p, batches, totalQty, earliestExpiry, latestDesiredManual, latestDesiredMrp };
-  }
+    return { product: p, batches, receivedOrderQty, submittedCurrentQty, totalCurrentQty, earliestExpiry, desiredManual, desiredMrp, expectedDemandQty, demandSource, safetyStock };
+  });
 
-  if (!country) {
-    return (
-      <div className="text-center py-10">
-        <Layers className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-        <p className="text-gray-400 text-sm">No country assigned to your account. Contact an administrator.</p>
-      </div>
-    );
-  }
+  const stockGroups = productGroups.filter(g => g.batches.length > 0 || g.submittedCurrentQty != null);
+
+  if (!country) return (
+    <div className="text-center py-10">
+      <Layers className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+      <p className="text-gray-400 text-sm">No country assigned. Contact an administrator.</p>
+    </div>
+  );
 
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[#4A9E4A]" /></div>;
 
-  const productGroups = Object.values(productMap);
-
-  if (productGroups.length === 0) {
-    return (
-      <div className="text-center py-10">
-        <Layers className="w-8 h-8 text-gray-200 mx-auto mb-2" />
-        <p className="text-gray-400 text-sm">No inventory records found for {country}.</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-3">
-      {productGroups.map(({ product, batches, totalQty, earliestExpiry, latestDesiredManual, latestDesiredMrp }) => {
-        const isExpanded = expandedProduct === product.key;
-        const dManual = latestDesiredManual?.qty;
-        const dMrp = latestDesiredMrp?.qty;
-        const showBothDesired = dManual != null && dMrp != null;
+    <div className="space-y-4">
+      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+        {[{ id: "stock", label: "Stock Levels" }, { id: "safety", label: "Safety Stock" }].map(t => (
+          <button key={t.id} onClick={() => setSubTab(t.id)}
+            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${subTab === t.id ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-        return (
-          <div key={product.key} className="rounded-xl border border-gray-200 bg-white overflow-hidden">
-            <div className="flex items-center gap-4 px-4 py-3">
-              <div className="w-9 h-9 rounded-lg bg-[#2D6A2D]/10 flex items-center justify-center shrink-0">
-                <Package className="w-4.5 h-4.5 text-[#2D6A2D]" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm text-gray-800">{product.name}</p>
-                <div className="flex flex-wrap gap-3 mt-0.5">
-                  <span className="text-xs text-gray-500">Stock: <span className="font-bold text-[#2D6A2D]">{totalQty.toFixed(2)} t</span></span>
-                  {earliestExpiry && (
-                    <span className="text-xs text-gray-500">Expires: <span className="font-medium text-gray-700">{earliestExpiry.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span></span>
-                  )}
-                  {product.shelfLifeMonths != null && (
-                    <span className="text-xs text-gray-500">Shelf life: <span className="font-medium text-gray-700">{product.shelfLifeMonths} mo</span></span>
-                  )}
-                  {!showBothDesired && dManual != null && (
-                    <span className="text-xs text-gray-500">Desired: <span className="font-medium text-purple-700">{dManual.toFixed(2)} t</span></span>
-                  )}
-                  {!showBothDesired && dMrp != null && (
-                    <span className="text-xs text-gray-500">Desired (MRP): <span className="font-medium text-purple-700">{dMrp.toFixed(2)} t</span></span>
-                  )}
-                  {showBothDesired && (
-                    <span className="text-xs text-gray-500">
-                      Desired (Manual): <span className="font-medium text-purple-700">{dManual.toFixed(2)} t</span>
-                      {" "}&nbsp;Desired (MRP): <span className={`font-medium ${Math.abs(dManual - dMrp) > 0.001 ? "text-amber-600" : "text-purple-700"}`}>{dMrp.toFixed(2)} t</span>
-                      {Math.abs(dManual - dMrp) > 0.001 && <span className="text-amber-500 ml-1">(Δ {(dManual - dMrp).toFixed(2)})</span>}
-                    </span>
+      {subTab === "stock" && (
+        stockGroups.length === 0 ? (
+          <div className="text-center py-10">
+            <Layers className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+            <p className="text-gray-400 text-sm">No inventory records for {country}.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {stockGroups.map(({ product, batches, receivedOrderQty, submittedCurrentQty, totalCurrentQty, earliestExpiry }) => {
+              const isExpanded = expandedProduct === product.key;
+              return (
+                <div key={product.key} className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+                  <div className="flex items-center gap-4 px-4 py-3">
+                    <div className="w-9 h-9 rounded-lg bg-[#2D6A2D]/10 flex items-center justify-center shrink-0">
+                      <Package className="w-4 h-4 text-[#2D6A2D]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm text-gray-800">{product.name}</p>
+                      <div className="flex flex-wrap gap-3 mt-0.5">
+                        <span className="text-xs text-gray-500">Total: <span className="font-bold text-[#2D6A2D]">{totalCurrentQty.toFixed(2)} t</span></span>
+                        {submittedCurrentQty != null && receivedOrderQty > 0 && (
+                          <span className="text-xs text-gray-400">(submitted {submittedCurrentQty.toFixed(2)} + received {receivedOrderQty.toFixed(2)})</span>
+                        )}
+                        {earliestExpiry && (
+                          <span className="text-xs text-gray-500">Earliest expiry: <span className="font-medium text-amber-700">{earliestExpiry.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span></span>
+                        )}
+                        {product.shelfLifeMonths != null && (
+                          <span className="text-xs text-gray-500">Shelf life: <span className="font-medium text-gray-700">{product.shelfLifeMonths} mo</span></span>
+                        )}
+                      </div>
+                    </div>
+                    {batches.length > 0 && (
+                      <button onClick={() => setExpandedProduct(isExpanded ? null : product.key)}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:text-[#2D6A2D] hover:bg-green-50 border border-gray-200 hover:border-[#4A9E4A] transition-colors">
+                        {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                        Batches ({batches.length})
+                      </button>
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <div className="border-t border-gray-100 bg-gray-50">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="border-b border-gray-100">
+                            {["Batch ID","Qty (t)","Expiry","Status",""].map(h => (
+                              <th key={h} className="text-left px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {batches.map(batch => {
+                            const computedExpiry = getComputedExpiry(batch, product.shelfLifeMonths);
+                            return (
+                              <tr key={batch.id} className="hover:bg-white transition-colors">
+                                <td className="px-4 py-2.5 text-gray-700">{batch.batchId || <span className="text-gray-300 italic">—</span>}</td>
+                                <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-[#2D6A2D]">{(batch.qty ?? 0).toFixed(2)}</td>
+                                <td className="px-4 py-2.5 text-gray-600">{fmtDate(computedExpiry)}</td>
+                                <td className="px-4 py-2.5">
+                                  {batch.deliveredAt ? (
+                                    <div className="flex items-center gap-1">
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+                                      <span className="text-green-700 font-medium">Delivered {fmtDateTime(batch.deliveredAt)}</span>
+                                    </div>
+                                  ) : <span className="text-gray-400">Not delivered</span>}
+                                </td>
+                                <td className="px-4 py-2.5 text-right">
+                                  {!batch.deliveredAt && (
+                                    <button onClick={() => handleMarkDelivered(batch)} disabled={marking === batch.id}
+                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 disabled:opacity-60 transition-colors">
+                                      {marking === batch.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Truck className="w-3 h-3" />}
+                                      Mark Delivered
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
-              </div>
-              <button
-                onClick={() => setExpandedProduct(isExpanded ? null : product.key)}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:text-[#2D6A2D] hover:bg-green-50 border border-gray-200 hover:border-[#4A9E4A] transition-colors"
-              >
-                {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                More Info
-              </button>
-            </div>
-
-            {isExpanded && (
-              <div className="border-t border-gray-100 bg-gray-50">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-gray-100">
-                      <th className="text-left px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">Batch ID</th>
-                      <th className="text-right px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">Qty (t)</th>
-                      <th className="text-left px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">Expiry</th>
-                      <th className="text-left px-4 py-2.5 text-gray-500 font-semibold uppercase tracking-wider">Status</th>
-                      <th className="px-4 py-2.5" />
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {batches.map(batch => (
-                      <tr key={batch.id} className="hover:bg-white transition-colors">
-                        <td className="px-4 py-2.5 text-gray-700">{batch.batchId || <span className="text-gray-300 italic">—</span>}</td>
-                        <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-[#2D6A2D]">{(batch.qty ?? 0).toFixed(2)}</td>
-                        <td className="px-4 py-2.5 text-gray-600">{fmtDate(batch.expiryDate)}</td>
-                        <td className="px-4 py-2.5">
-                          {batch.deliveredAt ? (
-                            <div className="flex items-center gap-1">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
-                              <span className="text-green-700 font-medium">Delivered {fmtDateTime(batch.deliveredAt)}</span>
-                            </div>
-                          ) : (
-                            <span className="text-gray-400">Not delivered</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-2.5 text-right">
-                          {!batch.deliveredAt && (
-                            <button
-                              onClick={() => handleMarkDelivered(batch)}
-                              disabled={marking === batch.id}
-                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 disabled:opacity-60 transition-colors"
-                            >
-                              {marking === batch.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Truck className="w-3 h-3" />}
-                              Mark Delivered
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+              );
+            })}
           </div>
-        );
-      })}
+        )
+      )}
+
+      {subTab === "safety" && (
+        <div className="space-y-4">
+          <p className="text-xs text-gray-400">
+            Safety Stock = submitted current inventory + received orders − expected demand ({MONTH}). Desired shows your target from the demand submission.
+          </p>
+          {!currentDemand && (
+            <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-xl border border-amber-200">
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+              <p className="text-sm text-amber-700">No demand submitted for {MONTH} yet. Submit your demand to see safety stock estimates.</p>
+            </div>
+          )}
+          <div className="rounded-xl border border-gray-200 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  {["Product","Current (t)","Demand (t)","Safety Stock (t)","Desired Target (t)"].map(h => (
+                    <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {productGroups.map(({ product, totalCurrentQty, expectedDemandQty, demandSource, safetyStock, desiredManual, desiredMrp }) => {
+                  const desired = desiredManual ?? desiredMrp ?? null;
+                  const bothDesired = desiredManual != null && desiredMrp != null;
+                  const desiredMismatch = bothDesired && Math.abs(desiredManual - desiredMrp) > 0.001;
+                  return (
+                    <tr key={product.key} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <span className="font-medium text-gray-800">{product.name}</span>
+                        {demandSource === "resolved" && <span className="ml-2 text-xs text-green-600 font-medium">(resolved)</span>}
+                        {demandSource === "mrp" && <span className="ml-2 text-xs text-amber-600 font-medium">(MRP)</span>}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-gray-600">{totalCurrentQty.toFixed(2)}</td>
+                      <td className="px-4 py-3 tabular-nums text-gray-600">{expectedDemandQty.toFixed(2)}</td>
+                      <td className={`px-4 py-3 tabular-nums font-bold text-base ${safetyStock < 0 ? "text-red-600" : "text-[#2D6A2D]"}`}>
+                        {safetyStock.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {desired != null ? (
+                          <div>
+                            <span className="tabular-nums font-semibold text-purple-700">{desired.toFixed(2)}</span>
+                            {desiredMismatch && (
+                              <div className="text-xs text-amber-600 mt-0.5">
+                                Manual: {desiredManual.toFixed(2)} · MRP: {desiredMrp.toFixed(2)}
+                                <span className="ml-1">(Δ {Math.abs(desiredManual - desiredMrp).toFixed(2)})</span>
+                              </div>
+                            )}
+                          </div>
+                        ) : <span className="text-gray-300">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1138,6 +1246,8 @@ export default function CountryHeadDashboard() {
   const [products, setProducts] = useState(DEFAULT_PRODUCTS);
   const [productsLoading, setProductsLoading] = useState(true);
 
+  const [selectedMonth, setSelectedMonth] = useState(currentMonthStr());
+
   const [productValues, setProductValues] = useState({});
   const [currentInventory, setCurrentInventory] = useState({});
   const [desiredInventory, setDesiredInventory] = useState({});
@@ -1150,7 +1260,6 @@ export default function CountryHeadDashboard() {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyView, setHistoryView] = useState("table");
 
-  const [existingDoc, setExistingDoc] = useState(null);
   const [editMode, setEditMode] = useState(false);
   const [infoProduct, setInfoProduct] = useState(null);
   const [showChangeCountry, setShowChangeCountry] = useState(false);
@@ -1175,33 +1284,28 @@ export default function CountryHeadDashboard() {
   // Load submission history
   useEffect(() => {
     if (!currentUser) return;
-    const q = query(
-      collection(db, "demands"),
-      where("userId", "==", currentUser.uid)
-    );
-    const unsubscribe = onSnapshot(
-      q,
-      (snap) => {
-        const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => {
-            const aTime = a.submittedAt?.seconds ?? 0;
-            const bTime = b.submittedAt?.seconds ?? 0;
-            return bTime - aTime;
-          });
-
-        setHistory(data);
-        const thisMonth = data.find(d => d.month === CURRENT_MONTH);
-        setExistingDoc(thisMonth || null);
-        setHistoryLoading(false);
-      },
-      (err) => {
-        console.error("History query error:", err);
-        setHistoryLoading(false);
-      }
-    );
-    return unsubscribe;
+    const q = query(collection(db, "demands"), where("userId", "==", currentUser.uid));
+    return onSnapshot(q, (snap) => {
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.submittedAt?.seconds ?? 0) - (a.submittedAt?.seconds ?? 0));
+      setHistory(data);
+      setHistoryLoading(false);
+    }, (err) => { console.error("History query error:", err); setHistoryLoading(false); });
   }, [currentUser]);
+
+  // Reset form when selected month changes
+  useEffect(() => {
+    setEditMode(false);
+    setProductValues({});
+    setCurrentInventory({});
+    setDesiredInventory({});
+    setComment("");
+    setSubmitError("");
+    setSubmitSuccess(false);
+  }, [selectedMonth]);
+
+  // Compute existingDoc from history + selectedMonth (no separate state needed)
+  const existingDoc = history.find(d => d.month === selectedMonth) || null;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -1253,7 +1357,7 @@ export default function CountryHeadDashboard() {
         await addDoc(collection(db, "demands"), {
           userId: currentUser.uid,
           username: userProfile?.username || "Unknown",
-          month: CURRENT_MONTH,
+          month: selectedMonth,
           ...payload,
         });
       }
@@ -1300,6 +1404,8 @@ export default function CountryHeadDashboard() {
     setComment("");
     setSubmitError("");
   };
+
+  const monthOptions = generateMonthOptions(history.map(d => d.month));
 
   const productColors = products.map((_, i) => ALL_COLORS[i % ALL_COLORS.length]);
   const productLabels = products.map(p => p.name);
@@ -1384,11 +1490,18 @@ export default function CountryHeadDashboard() {
             {/* Submission Form / Status Card */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
               <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3 flex-wrap">
                   <Package className="w-4 h-4 text-[#2D6A2D]" />
-                  <h2 className="text-base font-bold text-gray-800">
-                    Expected Demand — {CURRENT_MONTH}
-                  </h2>
+                  <h2 className="text-base font-bold text-gray-800">Expected Demand</h2>
+                  <select
+                    value={selectedMonth}
+                    onChange={e => setSelectedMonth(e.target.value)}
+                    className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] bg-white text-gray-700"
+                  >
+                    {monthOptions.map(m => (
+                      <option key={m} value={m}>{m}{history.some(d => d.month === m) ? " ✓" : ""}</option>
+                    ))}
+                  </select>
                 </div>
                 {existingDoc && !editMode && (
                   <button
@@ -1407,7 +1520,7 @@ export default function CountryHeadDashboard() {
                     <div className="flex items-center gap-2 mb-5 p-3 bg-green-50 rounded-xl border border-green-200">
                       <CheckCircle2 className="w-4 h-4 text-[#2D6A2D] shrink-0" />
                       <p className="text-sm text-[#2D6A2D] font-medium">
-                        Submission recorded for {CURRENT_MONTH}
+                        Submission recorded for {selectedMonth}
                       </p>
                     </div>
                     <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Expected Demand</p>
@@ -1420,6 +1533,9 @@ export default function CountryHeadDashboard() {
                           </div>
                           <p className="text-2xl font-bold text-[#2D6A2D]">{Number(existingDoc[p.key] || 0).toFixed(2)}</p>
                           <p className="text-xs text-gray-400 mt-0.5">tons</p>
+                          {existingDoc[`adminNote_${p.key}`] && (
+                            <p className="text-xs text-amber-600 mt-1 leading-tight">{existingDoc[`adminNote_${p.key}`]}</p>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1478,7 +1594,7 @@ export default function CountryHeadDashboard() {
                       <div className="flex items-center gap-2 p-3 bg-yellow-50 rounded-xl border border-yellow-200">
                         <Edit3 className="w-4 h-4 text-yellow-600 shrink-0" />
                         <p className="text-sm text-yellow-700 font-medium">
-                          Editing submission for {CURRENT_MONTH}. Changes will overwrite your current entry.
+                          Editing submission for {selectedMonth}. Changes will overwrite your current entry.
                         </p>
                       </div>
                     )}
@@ -1664,16 +1780,18 @@ export default function CountryHeadDashboard() {
                         {history.map(d => {
                           const total = products.reduce((s, p) => s + (Number(d[p.key]) || 0), 0);
                           const submittedAt = d.submittedAt?.toDate?.();
-                          const isCurrent = d.month === CURRENT_MONTH;
+                          const isSelected = d.month === selectedMonth;
+                          const isCurrentM = d.month === currentMonthStr();
                           return (
-                            <tr key={d.id} className={`hover:bg-gray-50 transition-colors ${isCurrent ? "bg-green-50/50" : ""}`}>
+                            <tr key={d.id} className={`hover:bg-gray-50 transition-colors ${isSelected ? "bg-green-50/50" : ""}`}>
                               <td className="py-3 pr-4">
                                 <div className="flex items-center gap-2">
                                   <span className="font-medium text-gray-800">{d.month}</span>
-                                  {isCurrent && (
-                                    <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-[#2D6A2D] text-white">
-                                      Current
-                                    </span>
+                                  {isCurrentM && (
+                                    <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-[#2D6A2D] text-white">Current</span>
+                                  )}
+                                  {isSelected && !isCurrentM && (
+                                    <span className="px-1.5 py-0.5 rounded text-xs font-semibold bg-blue-500 text-white">Selected</span>
                                   )}
                                 </div>
                               </td>
