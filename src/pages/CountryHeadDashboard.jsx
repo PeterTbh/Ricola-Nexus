@@ -1448,7 +1448,7 @@ export default function CountryHeadDashboard() {
             </div>
             <div className="flex-1">
               <h1 className="text-xl font-bold text-gray-900">
-                {userProfile?.country ? `${userProfile.country} Dashboard` : "Country Head Dashboard"}
+                {userProfile?.country ? `${userProfile.country} Dashboard` : "Demand Planner Dashboard"}
               </h1>
               <p className="text-gray-500 text-sm mt-0.5">
                 {userProfile?.customFunction ? `${userProfile.customFunction} · ` : ""}

@@ -836,7 +836,7 @@ function StockLevelsTab({ items, products, loading, demands }) {
                                         <td className="px-3 py-2 text-blue-600 font-medium italic">Manual submission</td>
                                         <td className="px-3 py-2 tabular-nums font-semibold text-blue-700">{row.submittedQty.toFixed(2)}</td>
                                         <td className="px-3 py-2 text-gray-500">{row.submittedExpiry ? fmtDate(row.submittedExpiry) : <span className="text-gray-300">—</span>}</td>
-                                        <td className="px-3 py-2 text-blue-400 text-xs">Country head</td>
+                                        <td className="px-3 py-2 text-blue-400 text-xs">Demand planner</td>
                                         <td className="px-3 py-2">
                                           {row.demandDoc && (
                                             <button

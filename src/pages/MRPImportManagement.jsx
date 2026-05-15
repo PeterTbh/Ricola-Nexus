@@ -56,7 +56,7 @@ function MRPFormatModal({ onClose }) {
         </div>
         <div className="overflow-y-auto flex-1 px-6">
         <p className="text-sm text-gray-600 mb-4">
-          Row 1 must be the header row. Country and Product Key are required for discrepancy matching against country head submissions.
+          Row 1 must be the header row. Country and Product Key are required for discrepancy matching against demand planner submissions.
         </p>
         <div className="space-y-3 mb-5">
           {[
@@ -64,9 +64,9 @@ function MRPFormatModal({ onClose }) {
             { col: "B", name: "Period", required: true, desc: 'Month as "Month YYYY" (e.g. "May 2026"). Excel date cells are auto-recognized. Also accepted: "Month".' },
             { col: "C", name: "Expected Demand", required: true, desc: 'MRP-expected demand quantity in tons (numeric). Also accepted: "Demand", "Suggested Qty", "Qty", "Quantity", "MRP Qty".' },
             { col: "D", name: "Source Entity", required: false, desc: 'The supplying Ricola entity (e.g. "CH", "Malaysia"). Also accepted: "Entity", "Source".' },
-            { col: "E", name: "Country", required: true, desc: 'Destination country — must match the country assigned to the country head. Also accepted: "Land".' },
+            { col: "E", name: "Country", required: true, desc: 'Destination country — must match the country assigned to the demand planner. Also accepted: "Land".' },
             { col: "F", name: "Desired Inventory Level", required: false, desc: 'Desired inventory level in tons. A desired inventory entry is created when provided. Also accepted: "Inventory Level", "Inventory", "Desired Qty", "Desired Quantity", "Desired".' },
-            { col: "G", name: "Current Inventory Level", required: false, desc: 'Current inventory on hand in tons. Used for cross-validation against country head submissions. Also accepted: "Current Stock", "Stock", "Current Qty", "Current".' },
+            { col: "G", name: "Current Inventory Level", required: false, desc: 'Current inventory on hand in tons. Used for cross-validation against demand planner submissions. Also accepted: "Current Stock", "Stock", "Current Qty", "Current".' },
           ].map(({ col, name, required, desc }) => (
             <div key={col} className="flex gap-3">
               <div className="w-16 text-xs font-semibold text-gray-400 shrink-0 pt-0.5">Col {col}</div>
@@ -443,7 +443,7 @@ function UploadMRPModal({ onClose, onImported }) {
                   <div>
                     <p className="text-sm font-semibold text-amber-800">Unrecognized countries</p>
                     <p className="text-xs text-amber-700 mt-0.5">
-                      Add as a new country (import as-is, country heads should set their account to match) or assign to an existing country for immediate discrepancy matching.
+                      Add as a new country (import as-is, demand planners should set their account to match) or assign to an existing country for immediate discrepancy matching.
                     </p>
                   </div>
                 </div>
@@ -472,7 +472,7 @@ function UploadMRPModal({ onClose, onImported }) {
                           </button>
                         </div>
                         {mapping.action === "keep" && (
-                          <p className="text-xs text-gray-400">Rows will import with country <span className="font-medium">&quot;{rawCountry}&quot;</span>. Country heads must set their account country to this exact value for discrepancy detection to work.</p>
+                          <p className="text-xs text-gray-400">Rows will import with country <span className="font-medium">&quot;{rawCountry}&quot;</span>. Demand planners must set their account country to this exact value for discrepancy detection to work.</p>
                         )}
                         {mapping.action === "existing" && (
                           <select
@@ -837,7 +837,7 @@ function ActivationValidationModal({ imp, imports, onClose, onActivated }) {
                 <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-semibold text-amber-800">Unrecognized countries</p>
-                  <p className="text-xs text-amber-700 mt-0.5">No approved user has this country set. Add as new (country heads should update their account to match) or assign to an existing country.</p>
+                  <p className="text-xs text-amber-700 mt-0.5">No approved user has this country set. Add as new (demand planners should update their account to match) or assign to an existing country.</p>
                 </div>
               </div>
               <div className="space-y-3">
@@ -866,7 +866,7 @@ function ActivationValidationModal({ imp, imports, onClose, onActivated }) {
                         </button>
                       </div>
                       {mapping.action === "keep" && (
-                        <p className="text-xs text-gray-400">Rows keep country <span className="font-medium">&quot;{rawCountry}&quot;</span>. Country heads must set their account country to this exact value for discrepancy detection to work.</p>
+                        <p className="text-xs text-gray-400">Rows keep country <span className="font-medium">&quot;{rawCountry}&quot;</span>. Demand planners must set their account country to this exact value for discrepancy detection to work.</p>
                       )}
                       {mapping.action === "existing" && (
                         <select
@@ -1042,7 +1042,7 @@ export default function MRPImportManagement() {
     <>
       <div className="flex items-center justify-between mb-4">
         <p className="text-xs text-gray-400">
-          Manage MRP run imports. Activate one to compare expected demand against country head submissions and detect discrepancies.
+          Manage MRP run imports. Activate one to compare expected demand against demand planner submissions and detect discrepancies.
         </p>
         <button
           onClick={() => setShowUpload(true)}

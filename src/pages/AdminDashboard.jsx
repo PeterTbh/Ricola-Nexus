@@ -1087,7 +1087,7 @@ function ProductManagement() {
     <>
       {/* Toolbar — always visible */}
       <div className="flex items-center justify-between mb-3">
-        <p className="text-xs text-gray-400">Manage the products country heads forecast for.</p>
+        <p className="text-xs text-gray-400">Manage the products demand planners forecast for.</p>
         <div className="flex items-center gap-1.5">
           <button
             onClick={() => setShowFormatInfo(true)}
@@ -1595,8 +1595,7 @@ function PendingApprovals({ onApprove }) {
                   onChange={e => setRoleInputs(prev => ({ ...prev, [user.id]: e.target.value }))}
                   className="px-3 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent bg-white text-gray-700"
                 >
-                  <option value="country_head">Country Head</option>
-                  <option value="hf_planner">HF Planner</option>
+                  <option value="country_head">Demand Planner</option>
                 </select>
               </div>
               <div className="flex-1">
@@ -1893,12 +1892,10 @@ function ActiveAccounts() {
                 <td className="px-4 py-3">
                   <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
                     acc.role === "admin" ? "bg-yellow-100 text-yellow-800" :
-                    acc.role === "hf_planner" ? "bg-blue-100 text-blue-800" :
                     "bg-green-100 text-green-800"
                   }`}>
                     {acc.role === "admin" ? "Administrator" :
-                     acc.role === "hf_planner" ? "HF Planner" :
-                     "Country Head"}
+                     "Demand Planner"}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right">
@@ -2238,12 +2235,12 @@ function DemandOverview() {
               </div>
             ) : (
               <>
-                <p className="text-xs text-gray-400">Click a row to see that country head&apos;s full submission history.</p>
+                <p className="text-xs text-gray-400">Click a row to see that demand planner&apos;s full submission history.</p>
                 <div className="overflow-x-auto rounded-xl border border-gray-200">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
-                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Country Head</th>
+                        <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Demand Planner</th>
                         {products.map(p => (
                           <th key={p.key} className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{p.name} (t)</th>
                         ))}
@@ -2401,7 +2398,7 @@ function MessageCountryHeadModal({ discrepancy, onClose }) {
       <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h3 className="font-bold text-gray-900">Message Country Head</h3>
+            <h3 className="font-bold text-gray-900">Message Demand Planner</h3>
             <p className="text-xs text-gray-400 mt-0.5">{discrepancy.country} · {discrepancy.productKey} · {discrepancy.period}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
@@ -2425,7 +2422,7 @@ function MessageCountryHeadModal({ discrepancy, onClose }) {
           <textarea
             value={note}
             onChange={e => setNote(e.target.value)}
-            placeholder="Explain the discrepancy or ask the country head to review..."
+            placeholder="Explain the discrepancy or ask the demand planner to review..."
             rows={4}
             className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
           />
@@ -2595,14 +2592,14 @@ function InventoryMessageModal({ discrepancy, onClose }) {
       <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h3 className="font-bold text-gray-900">Message Country Head — Inventory</h3>
+            <h3 className="font-bold text-gray-900">Message Demand Planner — Inventory</h3>
             <p className="text-xs text-gray-400 mt-0.5">{discrepancy.country} · {discrepancy.productKey} · {discrepancy.period}</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
         </div>
         <div className="mb-4 p-3 bg-blue-50 rounded-xl border border-blue-100 text-xs space-y-1">
           <div className="flex justify-between">
-            <span className="text-gray-500">Reported by country head:</span>
+            <span className="text-gray-500">Reported by demand planner:</span>
             <span className="font-semibold text-gray-800">{discrepancy.demandInventoryQty?.toFixed(2)} t</span>
           </div>
           <div className="flex justify-between">
@@ -2618,7 +2615,7 @@ function InventoryMessageModal({ discrepancy, onClose }) {
           <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Your note</label>
           <textarea
             value={note} onChange={e => setNote(e.target.value)}
-            placeholder="Ask the country head to clarify their inventory level..."
+            placeholder="Ask the demand planner to clarify their inventory level..."
             rows={4}
             className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
           />
@@ -2684,7 +2681,7 @@ function InventoryResolveModal({ discrepancy, onClose }) {
         </div>
         <div className="mb-4 p-3 bg-blue-50 rounded-xl border border-blue-100 text-xs space-y-1">
           <div className="flex justify-between">
-            <span className="text-gray-500">Country head reported:</span>
+            <span className="text-gray-500">Demand planner reported:</span>
             <span className="font-semibold text-gray-800">{discrepancy.demandInventoryQty?.toFixed(2)} t</span>
           </div>
           <div className="flex justify-between">
@@ -2697,7 +2694,7 @@ function InventoryResolveModal({ discrepancy, onClose }) {
           <label className={`flex items-start gap-3 p-3 rounded-xl border-2 cursor-pointer transition-colors ${choice === "demand" ? "border-[#2D6A2D] bg-green-50" : "border-gray-200 hover:border-gray-300"}`}>
             <input type="radio" name="invResolveChoice" value="demand" checked={choice === "demand"} onChange={() => setChoice("demand")} className="mt-0.5 accent-[#2D6A2D]" />
             <div>
-              <p className="font-semibold text-sm text-gray-800">Use country head's reported level</p>
+              <p className="font-semibold text-sm text-gray-800">Use demand planner's reported level</p>
               <p className="text-xs text-gray-500 mt-0.5">{discrepancy.demandInventoryQty?.toFixed(2)} t (submitted by {discrepancy.demandUsername})</p>
             </div>
           </label>
@@ -3069,7 +3066,7 @@ function DiscrepanciesSection() {
                   {disc.message?.status === "admin_resolved" ? (
                     <div className="max-w-[200px]">
                       <p className="text-xs text-blue-700 font-medium">Accepted: {disc.message.resolvedQty?.toFixed(2) ?? "—"} t</p>
-                      <p className="text-xs text-gray-400 mt-0.5">({disc.message.adminChoice === "demand" ? "country head" : "MRP"})</p>
+                      <p className="text-xs text-gray-400 mt-0.5">({disc.message.adminChoice === "demand" ? "demand planner" : "MRP"})</p>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
@@ -3664,7 +3661,7 @@ function OrdersSection() {
           const parseP = s => { const [m, y] = s.split(" "); return new Date(`${m} 1, ${y}`); };
           return parseP(a) - parseP(b);
         });
-        const activeSummaryMonth = summaryMonth ?? CURRENT_MONTH_ORD;
+        const activeSummaryMonth = summaryMonth ?? (allPeriods.length > 0 ? allPeriods[allPeriods.length - 1] : CURRENT_MONTH_ORD);
         const filteredOrders = summaryMode === "year"
           ? orders.filter(o => o.period?.endsWith(String(currentYear)))
           : orders.filter(o => o.period === activeSummaryMonth);
@@ -3780,7 +3777,7 @@ function OrdersSection() {
                     {/* Country head comment */}
                     {order.countryHeadComment && (
                       <div className="p-3 bg-blue-50 rounded-xl border border-blue-100">
-                        <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider mb-1">Country head comment</p>
+                        <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider mb-1">Demand planner comment</p>
                         <p className="text-sm text-blue-800">{order.countryHeadComment}</p>
                       </div>
                     )}
@@ -3915,35 +3912,37 @@ export default function AdminDashboard() {
         </div>
 
         {/* Section Tabs */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          {sections.map(({ id, label, icon: Icon, badge, subtle }) => (
-            <button
-              key={id}
-              onClick={() => setActiveSection(id)}
-              className={subtle
-                ? `flex items-center justify-center sm:justify-start gap-2 px-4 py-3 rounded-xl border transition-all text-xs font-medium ${
-                    activeSection === id
-                      ? "bg-amber-50 text-amber-700 border-amber-300"
-                      : "bg-white text-gray-400 border-gray-200 hover:border-amber-200 hover:text-amber-600"
-                  }`
-                : `flex-1 flex items-center justify-center sm:justify-start gap-3 px-5 py-3.5 rounded-xl text-sm font-semibold border transition-all ${
-                    activeSection === id
-                      ? "bg-[#2D6A2D] text-white border-[#2D6A2D] shadow-md"
-                      : "bg-white text-gray-600 border-gray-200 hover:border-[#4A9E4A] hover:text-[#2D6A2D]"
-                  }`
-              }
-            >
-              <Icon className={`shrink-0 ${subtle ? "w-3.5 h-3.5" : "w-4 h-4"}`} />
-              <span>{label}</span>
-              {badge !== null && badge !== undefined && (
-                <span className={`ml-auto px-2 py-0.5 rounded-full text-xs font-bold ${
-                  activeSection === id ? "bg-[#F5C500] text-[#2D6A2D]" : "bg-red-100 text-red-600"
-                }`}>
-                  {badge}
-                </span>
-              )}
-            </button>
-          ))}
+        <div className="overflow-x-auto">
+          <div className="flex flex-row gap-3 pb-1 min-w-max">
+            {sections.map(({ id, label, icon: Icon, badge, subtle }) => (
+              <button
+                key={id}
+                onClick={() => setActiveSection(id)}
+                className={subtle
+                  ? `flex items-center justify-start gap-2 px-4 py-3 rounded-xl border transition-all text-xs font-medium ${
+                      activeSection === id
+                        ? "bg-amber-50 text-amber-700 border-amber-300"
+                        : "bg-white text-gray-400 border-gray-200 hover:border-amber-200 hover:text-amber-600"
+                    }`
+                  : `flex items-center justify-start gap-3 px-5 py-3.5 rounded-xl text-sm font-semibold border transition-all ${
+                      activeSection === id
+                        ? "bg-[#2D6A2D] text-white border-[#2D6A2D] shadow-md"
+                        : "bg-white text-gray-600 border-gray-200 hover:border-[#4A9E4A] hover:text-[#2D6A2D]"
+                    }`
+                }
+              >
+                <Icon className={`shrink-0 ${subtle ? "w-3.5 h-3.5" : "w-4 h-4"}`} />
+                <span>{label}</span>
+                {badge !== null && badge !== undefined && (
+                  <span className={`ml-auto px-2 py-0.5 rounded-full text-xs font-bold ${
+                    activeSection === id ? "bg-[#F5C500] text-[#2D6A2D]" : "bg-red-100 text-red-600"
+                  }`}>
+                    {badge}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Section Content */}

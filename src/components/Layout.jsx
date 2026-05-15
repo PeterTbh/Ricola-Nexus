@@ -15,11 +15,9 @@ export default function Layout({ children }) {
 
   const roleLabel =
     userProfile?.role === "admin" ? "Administrator" :
-    userProfile?.role === "hf_planner" ? "HF Planner" :
-    "Country Head";
+    "Demand Planner";
   const roleBadgeColor =
     userProfile?.role === "admin" ? "bg-yellow-100 text-yellow-800" :
-    userProfile?.role === "hf_planner" ? "bg-blue-100 text-blue-800" :
     "bg-green-100 text-green-800";
 
   return (
