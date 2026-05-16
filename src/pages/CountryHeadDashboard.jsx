@@ -1750,6 +1750,8 @@ export default function CountryHeadDashboard() {
   const [infoProduct, setInfoProduct] = useState(null);
   const [showChangeCountry, setShowChangeCountry] = useState(false);
 
+  const [activeMrp, setActiveMrp] = useState(null);
+
   const [orderBatchesForHistory, setOrderBatchesForHistory] = useState([]);
   const [wasteForHistory, setWasteForHistory] = useState([]);
 
@@ -1798,6 +1800,12 @@ export default function CountryHeadDashboard() {
       setWasteForHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
   }, [userProfile?.country]);
+
+  useEffect(() => {
+    return onSnapshot(query(collection(db, "mrpImports"), where("isActive", "==", true)), snap => {
+      setActiveMrp(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
+    });
+  }, []);
 
   // Reset form when selected month changes
   useEffect(() => {
@@ -1963,6 +1971,38 @@ export default function CountryHeadDashboard() {
       </Layout>
     );
   }
+
+  const country = userProfile?.country || "";
+  const getMrpRowForProduct = (p) => {
+    if (!activeMrp?.rows) return null;
+    const allPKeys = [p.key, ...(p.keyHistory || [])];
+    return activeMrp.rows.find(r =>
+      allPKeys.includes(r.productKey) &&
+      r.country?.trim().toLowerCase() === country.trim().toLowerCase() &&
+      r.period === selectedMonth
+    ) ?? null;
+  };
+  const mrpRowsForMonth = products.map(p => ({ product: p, row: getMrpRowForProduct(p) }));
+  const hasMrpForMonth = mrpRowsForMonth.some(({ row }) => row !== null);
+
+  const prefillFromMrp = () => {
+    const vals = {};
+    const cInv = {};
+    const dInv = {};
+    for (const { product: p, row } of mrpRowsForMonth) {
+      if (row) {
+        const sq = typeof row.suggestedQty === "number" ? row.suggestedQty : parseFloat(row.suggestedQty);
+        if (!isNaN(sq)) vals[p.key] = String(sq);
+        const cq = typeof row.currentInventoryQty === "number" ? row.currentInventoryQty : parseFloat(row.currentInventoryQty ?? "");
+        if (!isNaN(cq) && cq >= 0) cInv[p.key] = String(cq);
+        const dq = typeof row.desiredQty === "number" ? row.desiredQty : parseFloat(row.desiredQty ?? "");
+        if (!isNaN(dq) && dq >= 0) dInv[p.key] = String(dq);
+      }
+    }
+    setProductValues(prev => ({ ...prev, ...vals }));
+    setCurrentInventory(prev => ({ ...prev, ...cInv }));
+    setDesiredInventory(prev => ({ ...prev, ...dInv }));
+  };
 
   const tabs = [
     { id: "demand", label: "Demand", icon: TrendingUp },
@@ -2146,22 +2186,54 @@ export default function CountryHeadDashboard() {
                       </div>
                     )}
 
+                    {!editMode && hasMrpForMonth && (
+                      <div className="flex items-start justify-between gap-3 p-3 bg-amber-50 rounded-xl border border-amber-200">
+                        <div className="flex items-start gap-2 min-w-0">
+                          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-sm text-amber-800 font-medium">MRP values available for {selectedMonth}</p>
+                            <p className="text-xs text-amber-600 mt-0.5">An MRP import has suggested demand quantities for your country. You can use them as-is or enter your own values.</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={prefillFromMrp}
+                          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 border border-amber-300 text-amber-800 text-xs font-semibold transition-colors whitespace-nowrap"
+                        >
+                          Pre-fill from MRP
+                        </button>
+                      </div>
+                    )}
+
                     {/* Expected Demand */}
                     <div>
                       <p className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-2">Expected Demand</p>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        {products.map((p) => (
-                          <div key={p.key}>
-                            <div className="flex items-center gap-1.5 mb-1.5">
-                              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{p.name}</label>
-                              <button type="button" onClick={() => setInfoProduct(p)} title="Product information" className="text-gray-300 hover:text-[#2D6A2D] transition-colors"><Info className="w-3.5 h-3.5" /></button>
+                        {products.map((p) => {
+                          const mrpRow = !editMode ? getMrpRowForProduct(p) : null;
+                          const mrpSuggested = mrpRow ? (typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty)) : null;
+                          return (
+                            <div key={p.key}>
+                              <div className="flex items-center gap-1.5 mb-1.5">
+                                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{p.name}</label>
+                                <button type="button" onClick={() => setInfoProduct(p)} title="Product information" className="text-gray-300 hover:text-[#2D6A2D] transition-colors"><Info className="w-3.5 h-3.5" /></button>
+                              </div>
+                              <div className="relative">
+                                <input type="number" min="0" step="0.01" value={productValues[p.key] || ""} onChange={e => setProductValues(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" required className="w-full px-4 py-3 pr-14 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
+                              </div>
+                              {mrpSuggested != null && !isNaN(mrpSuggested) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setProductValues(prev => ({ ...prev, [p.key]: String(mrpSuggested) }))}
+                                  className="mt-1 text-[11px] text-amber-600 hover:text-amber-800 font-medium transition-colors"
+                                >
+                                  MRP: {mrpSuggested.toFixed(2)} t — use this
+                                </button>
+                              )}
                             </div>
-                            <div className="relative">
-                              <input type="number" min="0" step="0.01" value={productValues[p.key] || ""} onChange={e => setProductValues(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" required className="w-full px-4 py-3 pr-14 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
-                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -2172,15 +2244,28 @@ export default function CountryHeadDashboard() {
                         <p className="text-xs text-blue-500 mt-0.5">Stock on hand as of today</p>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        {products.map((p) => (
-                          <div key={p.key}>
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">{p.name}</label>
-                            <div className="relative">
-                              <input type="number" min="0" step="0.01" value={currentInventory[p.key] ?? ""} onChange={e => setCurrentInventory(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" required className="w-full px-4 py-3 pr-8 rounded-xl border border-blue-200 bg-white text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
-                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
+                        {products.map((p) => {
+                          const mrpRow = !editMode ? getMrpRowForProduct(p) : null;
+                          const mrpCurrent = mrpRow ? (typeof mrpRow.currentInventoryQty === "number" ? mrpRow.currentInventoryQty : parseFloat(mrpRow.currentInventoryQty ?? "")) : null;
+                          return (
+                            <div key={p.key}>
+                              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">{p.name}</label>
+                              <div className="relative">
+                                <input type="number" min="0" step="0.01" value={currentInventory[p.key] ?? ""} onChange={e => setCurrentInventory(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" required className="w-full px-4 py-3 pr-8 rounded-xl border border-blue-200 bg-white text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
+                              </div>
+                              {mrpCurrent != null && !isNaN(mrpCurrent) && mrpCurrent >= 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCurrentInventory(prev => ({ ...prev, [p.key]: String(mrpCurrent) }))}
+                                  className="mt-1 text-[11px] text-amber-600 hover:text-amber-800 font-medium transition-colors"
+                                >
+                                  MRP: {mrpCurrent.toFixed(2)} t — use this
+                                </button>
+                              )}
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
 
@@ -2191,15 +2276,28 @@ export default function CountryHeadDashboard() {
                         <p className="text-xs text-purple-500 mt-0.5">Target stock level</p>
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        {products.map((p) => (
-                          <div key={p.key}>
-                            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">{p.name}</label>
-                            <div className="relative">
-                              <input type="number" min="0" step="0.01" value={desiredInventory[p.key] ?? ""} onChange={e => setDesiredInventory(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" className="w-full px-4 py-3 pr-8 rounded-xl border border-purple-200 bg-white text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
-                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
+                        {products.map((p) => {
+                          const mrpRow = !editMode ? getMrpRowForProduct(p) : null;
+                          const mrpDesired = mrpRow ? (typeof mrpRow.desiredQty === "number" ? mrpRow.desiredQty : parseFloat(mrpRow.desiredQty ?? "")) : null;
+                          return (
+                            <div key={p.key}>
+                              <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">{p.name}</label>
+                              <div className="relative">
+                                <input type="number" min="0" step="0.01" value={desiredInventory[p.key] ?? ""} onChange={e => setDesiredInventory(prev => ({ ...prev, [p.key]: e.target.value }))} placeholder="0.00" className="w-full px-4 py-3 pr-8 rounded-xl border border-purple-200 bg-white text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-400">t</span>
+                              </div>
+                              {mrpDesired != null && !isNaN(mrpDesired) && mrpDesired >= 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDesiredInventory(prev => ({ ...prev, [p.key]: String(mrpDesired) }))}
+                                  className="mt-1 text-[11px] text-amber-600 hover:text-amber-800 font-medium transition-colors"
+                                >
+                                  MRP: {mrpDesired.toFixed(2)} t — use this
+                                </button>
+                              )}
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
 

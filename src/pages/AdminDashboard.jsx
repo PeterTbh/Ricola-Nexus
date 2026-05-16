@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from "react";
 import {
   collection, query, where, doc, updateDoc,
   deleteDoc, onSnapshot, orderBy, getDocs, serverTimestamp,
-  addDoc, writeBatch
+  addDoc, writeBatch, getDoc, setDoc
 } from "firebase/firestore";
 import { useAuth } from "../contexts/AuthContext";
 import * as XLSX from "xlsx";
@@ -17,7 +17,7 @@ import {
   Trash2, X, Archive, History, BarChart2, Table,
   ChevronRight, Info, Plus, Pencil, Save, MessageSquare,
   Upload, HelpCircle, Layers, FileSpreadsheet, AlertTriangle, Send, CheckCircle2,
-  ShoppingCart, Truck, ChevronDown, Bell
+  ShoppingCart, Truck, ChevronDown, Bell, FlaskConical
 } from "lucide-react";
 
 const MONTHS = [
@@ -356,6 +356,8 @@ function ProductInfoModal({ product, products, onClose }) {
   const [notes, setNotes] = useState(product.notes || "");
   const [type, setType] = useState(product.type || "HF");
   const [shelfLifeMonths, setShelfLifeMonths] = useState(product.shelfLifeMonths != null ? String(product.shelfLifeMonths) : "");
+  const [isomaltPerTon, setIsomaltPerTon] = useState(product.isomaltPerTon != null ? String(product.isomaltPerTon) : "");
+  const [sugarPerTon, setSugarPerTon] = useState(product.sugarPerTon != null ? String(product.sugarPerTon) : "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [shelfError, setShelfError] = useState("");
@@ -374,7 +376,13 @@ function ProductInfoModal({ product, products, onClose }) {
     }
     setShelfError("");
     setSaving(true);
-    const updates = { notes: notes.trim(), type, shelfLifeMonths: slm };
+    const ipt = isomaltPerTon !== "" ? parseFloat(isomaltPerTon) : null;
+    const spt = sugarPerTon !== "" ? parseFloat(sugarPerTon) : null;
+    const updates = {
+      notes: notes.trim(), type, shelfLifeMonths: slm,
+      isomaltPerTon: ipt != null && !isNaN(ipt) && ipt >= 0 ? ipt : null,
+      sugarPerTon: spt != null && !isNaN(spt) && spt >= 0 ? spt : null,
+    };
     if (trimmedKey !== product.key) {
       updates.key = trimmedKey;
       updates.keyHistory = [...(product.keyHistory || []), product.key];
@@ -442,6 +450,38 @@ function ProductInfoModal({ product, products, onClose }) {
               className={`w-full px-3 py-2.5 rounded-xl border text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${shelfError ? "border-red-400 bg-red-50" : "border-gray-200"}`}
             />
             {shelfError && <p className="text-xs text-red-600 mt-1">{shelfError}</p>}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+              Raw Materials (t per ton of product)
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <span className="block text-xs text-gray-400 mb-1">Isomalt / t</span>
+                <input
+                  type="number" step="0.0001" min="0"
+                  value={isomaltPerTon}
+                  onChange={e => setIsomaltPerTon(e.target.value)}
+                  placeholder="e.g. 0.5"
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </div>
+              <div>
+                <span className="block text-xs text-gray-400 mb-1">Sugar / t</span>
+                <input
+                  type="number" step="0.0001" min="0"
+                  value={sugarPerTon}
+                  onChange={e => setSugarPerTon(e.target.value)}
+                  placeholder="e.g. 0.3"
+                  className="w-full px-3 py-2 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </div>
+            </div>
+            {(!isomaltPerTon || parseFloat(isomaltPerTon) === 0) && (!sugarPerTon || parseFloat(sugarPerTon) === 0) && (
+              <p className="text-xs text-amber-600 bg-amber-50 px-2.5 py-1.5 rounded-lg mt-1.5">
+                No ingredient ratio set — enter isomalt or sugar per ton for material tracking.
+              </p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
@@ -3923,6 +3963,593 @@ function OrdersSection() {
   );
 }
 
+// ─── Material Format Info Modal ───────────────────────────────────────────────
+function MaterialFormatInfoModal({ onClose }) {
+  const columns = [
+    { col: "Column A", name: "Material", required: true,  desc: 'Must be "isomalt" or "sugar" (case-insensitive). Rows without a recognised value default to isomalt.' },
+    { col: "Column B", name: "Batch Number", required: true,  desc: 'Supplier or internal batch reference. Also accepted: "Batch", "Batch No", "BatchNumber", "Batch_Number".' },
+    { col: "Column C", name: "Quantity", required: true,  desc: 'Quantity in metric tons. Also accepted: "Qty", "Tons", "Quantity (tons)". Rows with blank or zero quantity are skipped.' },
+    { col: "Column D", name: "Date", required: false, desc: 'Delivery date. Also accepted: "Delivered", "Delivery Date", "DeliveredAt", "Delivery". Accepts text dates or Excel serial numbers. Defaults to today if omitted.' },
+    { col: "Column E", name: "Notes", required: false, desc: 'Optional free-text field. Also accepted: "Note", "Comments".' },
+  ];
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <HelpCircle className="w-4 h-4 text-[#2D6A2D]" />
+            <h3 className="font-bold text-gray-900">Expected Excel Format — Batch Upload</h3>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <p className="text-sm text-gray-600 mb-4">
+          Row 1 must be the header row. Each subsequent row is one batch entry.
+          <span className="font-semibold"> Material</span>, <span className="font-semibold">Batch Number</span>, and <span className="font-semibold">Quantity</span> are required.
+        </p>
+        <div className="space-y-3 mb-5">
+          {columns.map(({ col, name, required, desc }) => (
+            <div key={col} className="flex gap-3">
+              <div className="w-20 text-xs font-semibold text-gray-500 shrink-0 pt-0.5">{col}</div>
+              <div>
+                <p className="text-xs font-semibold text-gray-800">
+                  {name}
+                  {required
+                    ? <span className="text-red-500 ml-1">*</span>
+                    : <span className="text-gray-400 font-normal ml-1">(optional)</span>}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-xl border border-gray-200 overflow-hidden">
+          <div className="bg-gray-50 px-3 py-2 border-b border-gray-200">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Example</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-100 bg-yellow-50">
+                  {["Material", "Batch Number", "Quantity", "Date", "Notes"].map(h => (
+                    <th key={h} className="text-left px-3 py-2 font-semibold text-gray-700">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ["Isomalt", "ISO-2026-001", "12.50", "2026-05-10", "Supplier A"],
+                  ["Sugar",   "SUG-2026-007", "8.00",  "2026-04-22", ""],
+                  ["Isomalt", "ISO-2026-002", "5.25",  "",           "Urgent restock"],
+                ].map((row, i) => (
+                  <tr key={i} className="border-b border-gray-50 last:border-0">
+                    {row.map((cell, j) => (
+                      <td key={j} className="px-3 py-2 text-gray-700">
+                        {cell || <span className="text-gray-300 italic">empty</span>}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="mt-4 w-full px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors"
+        >
+          Got it
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Material Management ─────────────────────────────────────────────────────
+function BatchTable({ material, batchList, onDelete, deletingId }) {
+  const fmtDate = (raw) => {
+    const d = raw?.toDate?.() || (raw instanceof Date ? raw : null);
+    if (!d) return "—";
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  };
+  const total = batchList.reduce((s, b) => s + (b.quantityTons || 0), 0);
+  return (
+    <div className="mb-6">
+      <div className="flex items-center gap-2 mb-2">
+        <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${material === "isomalt" ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"}`}>
+          {material.charAt(0).toUpperCase() + material.slice(1)}
+        </span>
+        <span className="text-sm text-gray-500">
+          {batchList.length} batch{batchList.length !== 1 ? "es" : ""} ·{" "}
+          <span className="font-semibold text-gray-700">{total.toFixed(2)} t total</span>
+        </span>
+      </div>
+      {batchList.length === 0 ? (
+        <p className="text-xs text-gray-400 italic py-2 pl-1">No batches recorded.</p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-100">
+              <th className="text-left py-2 text-xs font-semibold text-gray-500">Batch #</th>
+              <th className="text-right py-2 text-xs font-semibold text-gray-500">Qty (t)</th>
+              <th className="text-right py-2 text-xs font-semibold text-gray-500">Delivered</th>
+              <th className="text-left py-2 pl-4 text-xs font-semibold text-gray-500">Notes</th>
+              <th className="py-2 w-8" />
+            </tr>
+          </thead>
+          <tbody>
+            {batchList.map(b => (
+              <tr key={b.id} className="border-b border-gray-50 hover:bg-gray-50">
+                <td className="py-2 font-mono text-xs text-gray-700">{b.batchNumber}</td>
+                <td className="py-2 text-right tabular-nums text-gray-700">{(b.quantityTons || 0).toFixed(2)}</td>
+                <td className="py-2 text-right text-gray-500 text-xs">{fmtDate(b.deliveredAt)}</td>
+                <td className="py-2 pl-4 text-gray-400 text-xs">{b.notes || "—"}</td>
+                <td className="py-2 text-right">
+                  <button onClick={() => onDelete(b.id)} disabled={deletingId === b.id} className="text-gray-300 hover:text-red-500 transition-colors">
+                    {deletingId === b.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function MaterialManagement() {
+  const [subTab, setSubTab] = useState("inventory");
+  const [batches, setBatches] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [demands, setDemands] = useState([]);
+  const [availableMonths, setAvailableMonths] = useState([]);
+  const [selectedMonth, setSelectedMonth] = useState("");
+  const [isomaltSS, setIsomaltSS] = useState("");
+  const [sugarSS, setSugarSS] = useState("");
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addMaterial, setAddMaterial] = useState("isomalt");
+  const [addBatchNum, setAddBatchNum] = useState("");
+  const [addQty, setAddQty] = useState("");
+  const [addDate, setAddDate] = useState("");
+  const [addNotes, setAddNotes] = useState("");
+  const [addLoading, setAddLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const [showFormatInfo, setShowFormatInfo] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    return onSnapshot(
+      query(collection(db, "materialBatches"), orderBy("deliveredAt", "desc")),
+      snap => setBatches(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    );
+  }, []);
+
+  useEffect(() => {
+    return onSnapshot(collection(db, "products"), snap => {
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
+    });
+  }, []);
+
+  useEffect(() => {
+    getDoc(doc(db, "materialSettings", "targets")).then(d => {
+      if (d.exists()) {
+        const data = d.data();
+        setIsomaltSS(data.isomaltSafetyStock != null ? String(data.isomaltSafetyStock) : "");
+        setSugarSS(data.sugarSafetyStock != null ? String(data.sugarSafetyStock) : "");
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    const q = query(collection(db, "demands"), orderBy("submittedAt", "desc"));
+    return onSnapshot(q, snap => {
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(d => !d.archived);
+      setDemands(docs);
+      const monthSet = new Set(docs.map(d => d.month).filter(Boolean));
+      const now = new Date();
+      for (let i = 0; i <= 3; i++) {
+        const dt = new Date(now.getFullYear(), now.getMonth() + i, 1);
+        monthSet.add(`${MONTHS[dt.getMonth()]} ${dt.getFullYear()}`);
+      }
+      const sorted = [...monthSet].sort((a, b) => parseMonthToDate(a) - parseMonthToDate(b));
+      setAvailableMonths(sorted);
+      setSelectedMonth(prev => {
+        if (prev) return prev;
+        const currDate = parseMonthToDate(currentMonthStr());
+        const future = sorted.find(m => parseMonthToDate(m) > currDate);
+        return future || currentMonthStr();
+      });
+    });
+  }, []);
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    await setDoc(doc(db, "materialSettings", "targets"), {
+      isomaltSafetyStock: parseFloat(isomaltSS) || 0,
+      sugarSafetyStock: parseFloat(sugarSS) || 0,
+    });
+    setSavingSettings(false);
+    setSettingsSaved(true);
+    setTimeout(() => setSettingsSaved(false), 2000);
+  };
+
+  const handleAddBatch = async () => {
+    if (!addBatchNum.trim() || !addQty || !addDate) return;
+    setAddLoading(true);
+    await addDoc(collection(db, "materialBatches"), {
+      material: addMaterial,
+      batchNumber: addBatchNum.trim(),
+      quantityTons: parseFloat(addQty),
+      deliveredAt: new Date(addDate),
+      notes: addNotes.trim(),
+      createdAt: serverTimestamp(),
+    });
+    setAddBatchNum(""); setAddQty(""); setAddDate(""); setAddNotes("");
+    setAddLoading(false); setShowAddForm(false);
+  };
+
+  const handleDeleteBatch = async (id) => {
+    if (!window.confirm("Delete this batch entry?")) return;
+    setDeletingId(id);
+    await deleteDoc(doc(db, "materialBatches", id));
+    setDeletingId(null);
+  };
+
+  const handleExcelUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        if (rows.length < 2) return;
+        const header = rows[0].map(h => String(h).trim().toLowerCase());
+        const materialIdx = header.findIndex(h => h === "material");
+        const batchIdx = header.findIndex(h => ["batch", "batch number", "batchnumber", "batch_number", "batch no"].includes(h));
+        const qtyIdx = header.findIndex(h => ["quantity", "qty", "tons", "quantity (tons)", "quantity(tons)"].includes(h));
+        const dateIdx = header.findIndex(h => ["date", "delivered", "delivery date", "deliveredat", "delivery"].includes(h));
+        const notesIdx = header.findIndex(h => ["notes", "note", "comments"].includes(h));
+        const batch = writeBatch(db);
+        let count = 0;
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          const mat = materialIdx >= 0 ? String(row[materialIdx]).trim().toLowerCase() : "isomalt";
+          const batchNum = batchIdx >= 0 ? String(row[batchIdx]).trim() : "";
+          const qty = qtyIdx >= 0 ? parseFloat(row[qtyIdx]) : NaN;
+          if (!batchNum || isNaN(qty) || qty <= 0) continue;
+          const material = mat.includes("sugar") ? "sugar" : "isomalt";
+          let deliveredAt = new Date();
+          if (dateIdx >= 0) {
+            const rawDate = row[dateIdx];
+            const parsed = new Date(rawDate);
+            if (!isNaN(parsed.getTime())) {
+              deliveredAt = parsed;
+            } else {
+              const serial = parseFloat(rawDate);
+              if (!isNaN(serial)) deliveredAt = new Date(Math.round((serial - 25569) * 86400 * 1000));
+            }
+          }
+          const ref = doc(collection(db, "materialBatches"));
+          batch.set(ref, {
+            material, batchNumber: batchNum, quantityTons: qty, deliveredAt,
+            notes: notesIdx >= 0 ? String(row[notesIdx]).trim() : "",
+            createdAt: serverTimestamp(),
+          });
+          count++;
+        }
+        if (count > 0) await batch.commit();
+      } catch (err) {
+        console.error("Material upload failed:", err);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
+  // Demand calculations
+  const latestByUser = {};
+  demands
+    .filter(d => (d.month || "").trim().toLowerCase() === (selectedMonth || "").trim().toLowerCase())
+    .forEach(d => { const k = d.userId || d.id; if (!latestByUser[k]) latestByUser[k] = d; });
+  const monthDemands = Object.values(latestByUser);
+
+  const productRows = [...products]
+    .sort((a, b) => (a.order ?? 99) - (b.order ?? 99))
+    .map(p => {
+      const allKeys = [p.key, ...(p.keyHistory || [])];
+      const demandTons = monthDemands.reduce((sum, d) => sum + allKeys.reduce((v, k) => v + (Number(d[k]) || 0), 0), 0);
+      return {
+        id: p.id, name: p.name,
+        isomaltPerTon: p.isomaltPerTon || 0,
+        sugarPerTon: p.sugarPerTon || 0,
+        demandTons,
+        isomaltDemand: demandTons * (p.isomaltPerTon || 0),
+        sugarDemand: demandTons * (p.sugarPerTon || 0),
+        noIngredient: !p.isomaltPerTon && !p.sugarPerTon,
+      };
+    });
+
+  const totalIsomaltDemand = productRows.reduce((s, r) => s + r.isomaltDemand, 0);
+  const totalSugarDemand = productRows.reduce((s, r) => s + r.sugarDemand, 0);
+  const currentIsomalt = batches.filter(b => b.material === "isomalt").reduce((s, b) => s + (b.quantityTons || 0), 0);
+  const currentSugar = batches.filter(b => b.material === "sugar").reduce((s, b) => s + (b.quantityTons || 0), 0);
+  const ssIsomalt = parseFloat(isomaltSS) || 0;
+  const ssSugar = parseFloat(sugarSS) || 0;
+  const netIsomalt = ssIsomalt - currentIsomalt + totalIsomaltDemand;
+  const netSugar = ssSugar - currentSugar + totalSugarDemand;
+
+  const handleExport = () => {
+    const fmtD = (raw) => {
+      const d = raw?.toDate?.() || (raw instanceof Date ? raw : null);
+      return d ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
+    };
+    const aoa = [];
+    const merges = [];
+    const push = (row) => aoa.push(row);
+    const lastMerge = (c1, c2) => merges.push({ s: { r: aoa.length - 1, c: c1 }, e: { r: aoa.length - 1, c: c2 } });
+
+    const MIN_PROD_ROWS = 10;
+    const E = "";  // empty cell shorthand
+
+    // ── Title ──
+    push(["RICOLA NEXUS — Raw Material Demand Report", E, E, E, E]);
+    lastMerge(0, 4);
+    push([`Period: ${selectedMonth}`, E, E, `Generated: ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`, E]);
+    push([E, E, E, E, E]);
+
+    // ── Order Summary ──
+    push([`ORDER SUMMARY  —  Materials to Procure for ${selectedMonth}`, E, E, E, E]);
+    lastMerge(0, 4);
+    push(["Material", "Net Order Qty (t)", "Total Demand (t)", "– Inventory (t)", "+ Safety Stock (t)"]);
+    push(["Isomalt", +netIsomalt.toFixed(2), +totalIsomaltDemand.toFixed(2), +currentIsomalt.toFixed(2), +ssIsomalt.toFixed(2)]);
+    push(["Sugar",   +netSugar.toFixed(2),   +totalSugarDemand.toFixed(2),   +currentSugar.toFixed(2),   +ssSugar.toFixed(2)]);
+    push(["Formula: Net Order Qty = Total Material Demand + Safety Stock − Current Inventory", E, E, E, E]);
+    lastMerge(0, 4);
+    push([E, E, E, E, E]);
+
+    // ── Isomalt section ──
+    push(["ISOMALT  —  Demand Calculation", E, E, E, E]);
+    lastMerge(0, 4);
+    push(["Product", "Product Demand (t)", "Isomalt Content (t/t)", "Isomalt Demand (t)", E]);
+    const isoProd = productRows.filter(pr => pr.isomaltPerTon > 0 || pr.isomaltDemand > 0);
+    isoProd.forEach(pr => push([pr.name, +pr.demandTons.toFixed(2), +pr.isomaltPerTon.toFixed(4), +pr.isomaltDemand.toFixed(2), E]));
+    for (let i = isoProd.length; i < MIN_PROD_ROWS; i++) push([E, E, E, E, E]);
+    push(["Total Isomalt Demand (t)", E, E, +totalIsomaltDemand.toFixed(2), E]);
+    push(["Current Isomalt Inventory (t)", E, E, +currentIsomalt.toFixed(2), E]);
+    push(["Safety Stock Target (t)", E, E, +ssIsomalt.toFixed(2), E]);
+    push(["→  NET ISOMALT ORDER QTY (t)", E, E, +netIsomalt.toFixed(2), E]);
+    push([E, E, E, E, E]);
+
+    // ── Sugar section ──
+    push(["SUGAR  —  Demand Calculation", E, E, E, E]);
+    lastMerge(0, 4);
+    push(["Product", "Product Demand (t)", "Sugar Content (t/t)", "Sugar Demand (t)", E]);
+    const sugProd = productRows.filter(pr => pr.sugarPerTon > 0 || pr.sugarDemand > 0);
+    sugProd.forEach(pr => push([pr.name, +pr.demandTons.toFixed(2), +pr.sugarPerTon.toFixed(4), +pr.sugarDemand.toFixed(2), E]));
+    for (let i = sugProd.length; i < MIN_PROD_ROWS; i++) push([E, E, E, E, E]);
+    push(["Total Sugar Demand (t)", E, E, +totalSugarDemand.toFixed(2), E]);
+    push(["Current Sugar Inventory (t)", E, E, +currentSugar.toFixed(2), E]);
+    push(["Safety Stock Target (t)", E, E, +ssSugar.toFixed(2), E]);
+    push(["→  NET SUGAR ORDER QTY (t)", E, E, +netSugar.toFixed(2), E]);
+    push([E, E, E, E, E]);
+
+    // ── Inventory batches ──
+    push(["CURRENT INVENTORY BATCHES", E, E, E, E]);
+    lastMerge(0, 4);
+    push(["Material", "Batch Number", "Quantity (t)", "Delivered", "Notes"]);
+    batches.forEach(b => push([
+      b.material.charAt(0).toUpperCase() + b.material.slice(1),
+      b.batchNumber,
+      +(b.quantityTons || 0).toFixed(2),
+      fmtD(b.deliveredAt),
+      b.notes || E,
+    ]));
+    for (let i = 0; i < 5; i++) push([E, E, E, E, E]);
+
+    // ── Footer ──
+    push(["Inputs highlighted in grey (inventory, safety stock) — update before finalising order", E, E, E, E]);
+    lastMerge(0, 4);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 40 }, { wch: 18 }, { wch: 22 }, { wch: 20 }, { wch: 30 }];
+    ws["!merges"] = merges;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Material Demand");
+    XLSX.writeFile(wb, `material_demand_${selectedMonth.replace(" ", "_")}.xlsx`);
+  };
+
+  const isomaltBatches = batches.filter(b => b.material === "isomalt");
+  const sugarBatches = batches.filter(b => b.material === "sugar");
+
+  return (
+    <div className="space-y-4">
+      {/* Sub-tabs */}
+      <div className="flex gap-0 border-b border-gray-100">
+        {[{ id: "inventory", label: "Inventory" }, { id: "demand", label: "Demand" }].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setSubTab(t.id)}
+            className={`px-5 py-2.5 text-sm font-semibold border-b-2 transition-colors ${subTab === t.id ? "border-[#2D6A2D] text-[#2D6A2D]" : "border-transparent text-gray-500 hover:text-gray-700"}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === "inventory" && (
+        <div className="space-y-4 pt-1">
+          <div className="flex gap-2 flex-wrap items-center">
+            <button onClick={() => setShowAddForm(v => !v)} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-medium transition-colors">
+              <Plus className="w-4 h-4" /> Add Batch
+            </button>
+            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-200 hover:border-[#4A9E4A] text-gray-600 hover:text-[#2D6A2D] text-sm font-medium transition-colors">
+              <Upload className="w-4 h-4" /> Upload Excel
+            </button>
+            <button onClick={() => setShowFormatInfo(true)} className="flex items-center gap-1.5 px-2.5 py-2 rounded-xl border border-gray-200 text-gray-400 hover:text-[#2D6A2D] hover:border-[#4A9E4A] text-xs font-medium transition-colors">
+              <HelpCircle className="w-3.5 h-3.5" /> Format
+            </button>
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleExcelUpload} className="hidden" />
+          </div>
+
+          {showAddForm && (
+            <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-3">
+              <h4 className="text-sm font-semibold text-gray-700">New Batch Entry</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Material</label>
+                  <select value={addMaterial} onChange={e => setAddMaterial(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]">
+                    <option value="isomalt">Isomalt</option>
+                    <option value="sugar">Sugar</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Batch Number</label>
+                  <input type="text" value={addBatchNum} onChange={e => setAddBatchNum(e.target.value)} placeholder="e.g. ISO-2024-001" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Quantity (t)</label>
+                  <input type="number" step="0.01" min="0" value={addQty} onChange={e => setAddQty(e.target.value)} placeholder="0.00" className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Delivery Date</label>
+                  <input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Notes (optional)</label>
+                <input type="text" value={addNotes} onChange={e => setAddNotes(e.target.value)} placeholder="Supplier, PO#, etc." className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]" />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={handleAddBatch} disabled={addLoading || !addBatchNum.trim() || !addQty || !addDate} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-50 transition-colors">
+                  {addLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save Batch
+                </button>
+                <button onClick={() => setShowAddForm(false)} className="px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          <BatchTable material="isomalt" batchList={isomaltBatches} onDelete={handleDeleteBatch} deletingId={deletingId} />
+          <BatchTable material="sugar" batchList={sugarBatches} onDelete={handleDeleteBatch} deletingId={deletingId} />
+        </div>
+      )}
+
+      {subTab === "demand" && (
+        <div className="space-y-5 pt-1">
+          {/* Controls row */}
+          <div className="flex flex-wrap gap-4 items-end">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Period</label>
+              <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} className="px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]">
+                {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Isomalt Safety Stock (t)</label>
+              <input type="number" step="0.01" min="0" value={isomaltSS} onChange={e => setIsomaltSS(e.target.value)} placeholder="0.00" className="w-36 px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Sugar Safety Stock (t)</label>
+              <input type="number" step="0.01" min="0" value={sugarSS} onChange={e => setSugarSS(e.target.value)} placeholder="0.00" className="w-36 px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
+            </div>
+            <button onClick={handleSaveSettings} disabled={savingSettings} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-50 transition-colors">
+              {savingSettings ? <Loader2 className="w-4 h-4 animate-spin" /> : settingsSaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+              {settingsSaved ? "Saved!" : "Save Targets"}
+            </button>
+            <button onClick={handleExport} className="ml-auto flex items-center gap-2 px-3 py-2 rounded-xl border border-[#2D6A2D] text-[#2D6A2D] hover:bg-[#2D6A2D] hover:text-white text-sm font-semibold transition-colors">
+              <Download className="w-4 h-4" /> Export Excel
+            </button>
+          </div>
+
+          {monthDemands.length === 0 && (
+            <p className="text-sm text-gray-400 italic">No demand submissions found for {selectedMonth}.</p>
+          )}
+
+          {/* Product breakdown table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left py-2.5 text-xs font-semibold text-gray-500">Product</th>
+                  <th className="text-right py-2.5 text-xs font-semibold text-gray-500">Demand (t)</th>
+                  <th className="text-right py-2.5 text-xs font-semibold text-blue-500">Isomalt / t</th>
+                  <th className="text-right py-2.5 text-xs font-semibold text-blue-600">Isomalt Demand (t)</th>
+                  <th className="text-right py-2.5 text-xs font-semibold text-amber-500">Sugar / t</th>
+                  <th className="text-right py-2.5 text-xs font-semibold text-amber-600">Sugar Demand (t)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {productRows.map(r => (
+                  <tr key={r.id} className="border-b border-gray-50 hover:bg-gray-50">
+                    <td className="py-2.5 text-gray-700 font-medium">
+                      <span className="mr-1.5">{r.name}</span>
+                      {r.noIngredient && <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded font-normal">no ingredients set</span>}
+                    </td>
+                    <td className="py-2.5 text-right tabular-nums text-gray-600">{r.demandTons.toFixed(2)}</td>
+                    <td className="py-2.5 text-right tabular-nums text-blue-500">{r.isomaltPerTon > 0 ? r.isomaltPerTon.toFixed(4) : "—"}</td>
+                    <td className="py-2.5 text-right tabular-nums text-blue-600 font-medium">{r.isomaltDemand > 0 ? r.isomaltDemand.toFixed(2) : "—"}</td>
+                    <td className="py-2.5 text-right tabular-nums text-amber-500">{r.sugarPerTon > 0 ? r.sugarPerTon.toFixed(4) : "—"}</td>
+                    <td className="py-2.5 text-right tabular-nums text-amber-600 font-medium">{r.sugarDemand > 0 ? r.sugarDemand.toFixed(2) : "—"}</td>
+                  </tr>
+                ))}
+                <tr className="border-t-2 border-gray-200 font-semibold text-gray-800 bg-gray-50">
+                  <td className="py-2.5 pl-1">Total</td>
+                  <td className="py-2.5 text-right tabular-nums">{productRows.reduce((s, r) => s + r.demandTons, 0).toFixed(2)}</td>
+                  <td />
+                  <td className="py-2.5 text-right tabular-nums text-blue-600">{totalIsomaltDemand.toFixed(2)}</td>
+                  <td />
+                  <td className="py-2.5 text-right tabular-nums text-amber-600">{totalSugarDemand.toFixed(2)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Net requirement summary cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+            {[
+              { label: "Isomalt", totalDemand: totalIsomaltDemand, current: currentIsomalt, ss: ssIsomalt, net: netIsomalt, color: "blue" },
+              { label: "Sugar", totalDemand: totalSugarDemand, current: currentSugar, ss: ssSugar, net: netSugar, color: "amber" },
+            ].map(({ label, totalDemand, current, ss, net, color }) => (
+              <div key={label} className={`rounded-xl border p-4 space-y-2 ${color === "blue" ? "border-blue-100 bg-blue-50/40" : "border-amber-100 bg-amber-50/40"}`}>
+                <h4 className={`text-xs font-bold uppercase tracking-wider ${color === "blue" ? "text-blue-600" : "text-amber-600"}`}>{label}</h4>
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Demand for period</span>
+                    <span className="tabular-nums font-medium text-gray-700">{totalDemand.toFixed(2)} t</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Current inventory</span>
+                    <span className="tabular-nums font-medium text-gray-700">−{current.toFixed(2)} t</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-500">Safety stock target</span>
+                    <span className="tabular-nums font-medium text-gray-700">+{ss.toFixed(2)} t</span>
+                  </div>
+                  <div className={`flex justify-between pt-1.5 border-t font-bold text-base ${color === "blue" ? "border-blue-200" : "border-amber-200"}`}>
+                    <span className={color === "blue" ? "text-blue-700" : "text-amber-700"}>Net Requirement</span>
+                    <span className={`tabular-nums ${net > 0 ? (color === "blue" ? "text-blue-700" : "text-amber-700") : "text-[#2D6A2D]"}`}>
+                      {net.toFixed(2)} t
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showFormatInfo && <MaterialFormatInfoModal onClose={() => setShowFormatInfo(false)} />}
+    </div>
+  );
+}
+
 // ─── Main Admin Dashboard ──────────────────────────────────────────────────────
 export default function AdminDashboard() {
   const [activeSection, setActiveSection] = useState("pending");
@@ -3946,6 +4573,7 @@ export default function AdminDashboard() {
     { id: "products", label: "Products", icon: Package },
     { id: "inventory", label: "Inventory", icon: Layers },
     { id: "mrp", label: "MRP Imports", icon: FileSpreadsheet },
+    { id: "materials", label: "Materials", icon: FlaskConical },
     { id: "orders", label: "Orders", icon: ShoppingCart, badge: newReceiptCount > 0 ? newReceiptCount : null },
     { id: "discrepancies", label: "Discrepancies", icon: AlertTriangle, subtle: true },
   ];
@@ -4017,6 +4645,7 @@ export default function AdminDashboard() {
           {activeSection === "products" && <ProductManagement />}
           {activeSection === "inventory" && <InventoryManagement />}
           {activeSection === "mrp" && <MRPImportManagement />}
+          {activeSection === "materials" && <MaterialManagement />}
           {activeSection === "orders" && <OrdersSection />}
           {activeSection === "discrepancies" && <DiscrepanciesSection />}
         </div>
