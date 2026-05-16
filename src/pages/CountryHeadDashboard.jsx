@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import {
   collection, query, where, onSnapshot,
-  addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, getDocs
+  addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, getDocs, increment
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
@@ -365,16 +365,20 @@ function WasteRecordModal({ userProfile, products, inventory, currentUser, waste
         note: note.trim(),
         submittedAt: serverTimestamp(),
       });
+      // Reduce the physical batch qty so all stock views reflect the loss
+      await updateDoc(doc(db, "inventory", selectedBatchId), { qty: increment(-qty) });
       setSaved(true);
       setTimeout(() => { setSaved(false); onClose(); }, 1200);
     } catch (e) { console.error(e); }
     finally { setSaving(false); }
   };
 
-  const handleUndo = async (wasteId) => {
-    setUndoing(wasteId);
+  const handleUndo = async (w) => {
+    setUndoing(w.id);
     try {
-      await deleteDoc(doc(db, "waste", wasteId));
+      await deleteDoc(doc(db, "waste", w.id));
+      // Restore the wasted qty back to the inventory batch
+      await updateDoc(doc(db, "inventory", w.inventoryDocId), { qty: increment(w.wastedQty) });
     } catch (e) { console.error(e); }
     finally { setUndoing(null); }
   };
@@ -414,7 +418,7 @@ function WasteRecordModal({ userProfile, products, inventory, currentUser, waste
                     </div>
                   </div>
                   <button
-                    onClick={() => handleUndo(w.id)}
+                    onClick={() => handleUndo(w)}
                     disabled={!!undoing}
                     title="Undo — restore this quantity to inventory"
                     className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-[11px] font-medium text-gray-600 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 transition-colors">
@@ -511,6 +515,13 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
   const initialBatches = inventory.filter(i => i.source !== "order" && (!i.levelType || i.levelType === "current"));
   const sortedDemands = [...demands].sort((a, b) => parseMonthToDate(a.month) - parseMonthToDate(b.month));
 
+  // Map inventoryDocId → total wasted qty, so ordersIn always reflects original delivered amount
+  const batchWasteMap = {};
+  for (const w of wasteRecords) {
+    if (w.inventoryDocId) batchWasteMap[w.inventoryDocId] = (batchWasteMap[w.inventoryDocId] || 0) + (w.wastedQty || 0);
+  }
+  const origQty = (b) => (b.qty || 0) + (batchWasteMap[b.id] || 0);
+
   const ledger = products.map(product => {
     const pKey = product.key;
     const shelfLife = product.shelfLifeMonths ?? null;
@@ -535,8 +546,18 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
       const openingStock = demandM.currentInventory?.[pKey] ?? null;
       if (openingStock === null) { prevRow = null; continue; }
 
-      const ordersIn = productOrderBatches.filter(b => batchBelongsToPeriod(b, demandM.month)).reduce((s, b) => s + (b.qty || 0), 0);
-      const wasteQty = wasteRecords.filter(w => w.productKey === pKey && w.month === demandM.month).reduce((s, w) => s + (w.wastedQty || 0), 0);
+      const ordersIn = productOrderBatches.filter(b => batchBelongsToPeriod(b, demandM.month)).reduce((s, b) => s + origQty(b), 0);
+
+      // Attribute waste to the demand row whose window covers the waste month:
+      // waste belongs here if wDate >= demandM.month AND wDate < demandNext.month (or any future waste if this is the last row)
+      const demDate = parseMonthToDate(demandM.month);
+      const nextDate = demandNext ? parseMonthToDate(demandNext.month) : null;
+      const periodWaste = wasteRecords.filter(w => {
+        if (w.productKey !== pKey) return false;
+        const wDate = parseMonthToDate(w.month);
+        return wDate >= demDate && (nextDate === null || wDate < nextDate);
+      });
+      const wasteQty = periodWaste.reduce((s, w) => s + (w.wastedQty || 0), 0);
 
       // Stock unexplained by previous period's FIFO = manual/initial adjustment, shown separately with earliest expiry
       let manualDelta = 0;
@@ -557,7 +578,6 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
       const periodBatches = productOrderBatches
         .filter(b => batchBelongsToPeriod(b, demandM.month))
         .sort((a, b) => (a.expiryDate?.seconds ?? a.deliveredAt?.seconds ?? Infinity) - (b.expiryDate?.seconds ?? b.deliveredAt?.seconds ?? Infinity));
-      const periodWaste = wasteRecords.filter(w => w.productKey === pKey && w.month === demandM.month);
       const row = { month: demandM.month, openingStock, ordersIn, manualDelta, postDelivery, wasteQty, closingStock, consumption, submittedDemand, effectiveDemand, resolvedMsg, periodBatches, periodWaste };
       rows.push(row);
       prevRow = row;
@@ -656,14 +676,21 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
                                 {manualExpiry && <span className="text-amber-600 ml-auto text-[10px]">exp {manualExpiry.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} · consumed first</span>}
                               </div>
                             )}
-                            {row.periodBatches.map(b => (
-                              <div key={b.id} className="flex items-center gap-3 text-xs bg-white rounded-lg px-3 py-2 border border-green-100">
-                                <span className="text-green-600 font-bold shrink-0">↑ IN</span>
-                                <span className="text-gray-700 font-medium">{b.batchId || b.id.slice(-6)}</span>
-                                <span className="text-gray-500">{(b.qty ?? 0).toFixed(2)} t</span>
-                                {b.expiryDate && <span className="text-amber-600 ml-auto">exp {fmtDateStr(b.expiryDate)}</span>}
-                              </div>
-                            ))}
+                            {row.periodBatches.map(b => {
+                              const orig = origQty(b);
+                              const wasted = batchWasteMap[b.id] || 0;
+                              return (
+                                <div key={b.id} className="flex items-center gap-3 text-xs bg-white rounded-lg px-3 py-2 border border-green-100">
+                                  <span className="text-green-600 font-bold shrink-0">↑ IN</span>
+                                  <span className="text-gray-700 font-medium">{b.batchId || b.id.slice(-6)}</span>
+                                  <span className="text-gray-500">
+                                    {orig.toFixed(2)} t
+                                    {wasted > 0 && <span className="text-red-500 ml-1">({(b.qty ?? 0).toFixed(2)} t remaining)</span>}
+                                  </span>
+                                  {b.expiryDate && <span className="text-amber-600 ml-auto">exp {fmtDateStr(b.expiryDate)}</span>}
+                                </div>
+                              );
+                            })}
                             {row.periodWaste.map(w => (
                               <div key={w.id} className="flex items-center gap-3 text-xs bg-red-50 rounded-lg px-3 py-2 border border-red-100">
                                 <span className="text-red-600 font-bold shrink-0">↓ WASTE</span>
@@ -1887,8 +1914,17 @@ export default function CountryHeadDashboard() {
     if (openingStock == null) return null;
     const closingStock = demandNext?.currentInventory?.[productKey];
     if (closingStock == null) return null;
-    const ordersIn = orderBatchesForHistory.filter(b => b.productKey === productKey && batchBelongsToPeriod(b, monthStr)).reduce((s, b) => s + (b.qty || 0), 0);
-    const wasteQty = wasteForHistory.filter(w => w.productKey === productKey && w.month === monthStr).reduce((s, w) => s + (w.wastedQty || 0), 0);
+    const ordersIn = orderBatchesForHistory.filter(b => b.productKey === productKey && batchBelongsToPeriod(b, monthStr)).reduce((s, b) => {
+      const batchWasted = wasteForHistory.filter(w => w.inventoryDocId === b.id).reduce((sw, w) => sw + (w.wastedQty || 0), 0);
+      return s + (b.qty || 0) + batchWasted;
+    }, 0);
+    const demDateH = parseMonthToDate(monthStr);
+    const nextDateH = demandNext ? parseMonthToDate(demandNext.month) : null;
+    const wasteQty = wasteForHistory.filter(w => {
+      if (w.productKey !== productKey) return false;
+      const wDate = parseMonthToDate(w.month);
+      return wDate >= demDateH && (nextDateH === null || wDate < nextDateH);
+    }).reduce((s, w) => s + (w.wastedQty || 0), 0);
     return Math.max(0, openingStock + ordersIn - closingStock - wasteQty);
   };
 

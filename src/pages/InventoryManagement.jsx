@@ -1100,6 +1100,13 @@ function StockFlowTab({ items, products, demands, waste, messages }) {
   const initialBatches = items.filter(i => i.source !== "order" && (!i.levelType || i.levelType === "current"));
   const countries = [...new Set(demands.map(d => d.country).filter(Boolean))].sort();
 
+  // Map inventoryDocId → total wasted qty, so ordersIn always reflects original delivered amount
+  const batchWasteMapSF = {};
+  for (const w of (waste || [])) {
+    if (w.inventoryDocId) batchWasteMapSF[w.inventoryDocId] = (batchWasteMapSF[w.inventoryDocId] || 0) + (w.wastedQty || 0);
+  }
+  const origQtySF = (b) => (b.qty || 0) + (batchWasteMapSF[b.id] || 0);
+
   if (countries.length === 0) return (
     <div className="text-center py-10">
       <TrendingDown className="w-8 h-8 text-gray-200 mx-auto mb-2" />
@@ -1157,8 +1164,14 @@ function StockFlowTab({ items, products, demands, waste, messages }) {
                     const demandNext = sortedDemands[i + 1] ?? null;
                     const openingStock = demandM.currentInventory?.[pKey];
                     if (openingStock == null) { prevRow = null; continue; }
-                    const ordersIn = productOrderBatches.filter(b => batchBelongsToPeriodIM(b, demandM.month, MONTHS_LIST)).reduce((s, b) => s + (b.qty || 0), 0);
-                    const wasteQty = countryWaste.filter(w => w.productKey === pKey && w.month === demandM.month).reduce((s, w) => s + (w.wastedQty || 0), 0);
+                    const ordersIn = productOrderBatches.filter(b => batchBelongsToPeriodIM(b, demandM.month, MONTHS_LIST)).reduce((s, b) => s + origQtySF(b), 0);
+                    const demDateSF = parseMonth(demandM.month);
+                    const nextDateSF = demandNext ? parseMonth(demandNext.month) : null;
+                    const wasteQty = countryWaste.filter(w => {
+                      if (w.productKey !== pKey) return false;
+                      const wDate = parseMonth(w.month);
+                      return wDate >= demDateSF && (nextDateSF === null || wDate < nextDateSF);
+                    }).reduce((s, w) => s + (w.wastedQty || 0), 0);
                     let manualDelta = 0;
                     if (!prevRow && !hasAnyOrders) {
                       manualDelta = openingStock;
