@@ -690,7 +690,10 @@ function StockLevelsTab({ items, products, loading, demands }) {
   const [showUpload, setShowUpload] = useState(false);
   const [showFormat, setShowFormat] = useState(false);
 
-  const productMap = Object.fromEntries(products.map(p => [p.key, p]));
+  const productMap = {};
+  products.forEach(p => { productMap[p.key] = p; (p.keyHistory || []).forEach(k => { productMap[k] = p; }); });
+  // Normalize any historical key to the product's current key
+  const normalizeProductKey = (key) => productMap[key]?.key ?? key;
 
   // Use the most recent demand per country so initial inventory isn't lost when no current-month submission exists
   const latestDemandByCountrySL = {};
@@ -702,14 +705,14 @@ function StockLevelsTab({ items, products, loading, demands }) {
     }
   }
 
-  // Build summary rows: one per (entity, productKey)
-  // Sources: inventory collection batches (levelType=current) + demand.currentInventory from latest submission
+  // Build summary rows: one per (entity, productKey) — normalize historical keys to current key
   const summaryMap = {};
   for (const item of items) {
     if (item.levelType && item.levelType !== "current") continue;
-    const key = `${item.entity}||${item.productKey}`;
+    const normKey = normalizeProductKey(item.productKey);
+    const key = `${item.entity}||${normKey}`;
     if (!summaryMap[key]) {
-      summaryMap[key] = { entity: item.entity, productKey: item.productKey, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null, _baseDemandTimeSec: 0 };
+      summaryMap[key] = { entity: item.entity, productKey: normKey, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null, _baseDemandTimeSec: 0 };
     }
     summaryMap[key].currentBatches.push(item);
   }
@@ -719,13 +722,14 @@ function StockLevelsTab({ items, products, loading, demands }) {
     if (!country || !demand.currentInventory) continue;
     for (const [pk, qty] of Object.entries(demand.currentInventory)) {
       if (!qty) continue;
-      const key = `${country}||${pk}`;
+      const normPk = normalizeProductKey(pk);
+      const key = `${country}||${normPk}`;
       if (!summaryMap[key]) {
-        summaryMap[key] = { entity: country, productKey: pk, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null };
+        summaryMap[key] = { entity: country, productKey: normPk, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null };
       }
       summaryMap[key].submittedQty += Number(qty) || 0;
       summaryMap[key].demandDoc = demand;
-      summaryMap[key].submittedExpiry = demand.currentInventoryExpiry?.[pk] ?? null;
+      summaryMap[key].submittedExpiry = demand.currentInventoryExpiry?.[normPk] ?? demand.currentInventoryExpiry?.[pk] ?? null;
       summaryMap[key]._baseDemandTimeSec = demand.submittedAt?.seconds ?? 0;
     }
   }
@@ -944,7 +948,9 @@ function StockLevelsTab({ items, products, loading, demands }) {
 function EstimatedSafetyStockTab({ items, products, demands, messages }) {
   const MONTHS_LIST = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const CURRENT_MONTH = `${MONTHS_LIST[new Date().getMonth()]} ${new Date().getFullYear()}`;
-  const productMap = Object.fromEntries(products.map(p => [p.key, p]));
+  const productMap = {};
+  products.forEach(p => { productMap[p.key] = p; (p.keyHistory || []).forEach(k => { productMap[k] = p; }); });
+  const normalizeProductKey = (key) => productMap[key]?.key ?? key;
 
   // Latest demand per country (for current inventory display — not restricted to current month)
   const latestDemandByCountryESS = {};
@@ -962,8 +968,9 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
   const summaryMap = {};
   for (const item of items) {
     if (item.levelType && item.levelType !== "current") continue;
-    const key = `${item.entity}||${item.productKey}`;
-    if (!summaryMap[key]) summaryMap[key] = { entity: item.entity, productKey: item.productKey, orderBatches: [], nonOrderBatches: [] };
+    const normKey = normalizeProductKey(item.productKey);
+    const key = `${item.entity}||${normKey}`;
+    if (!summaryMap[key]) summaryMap[key] = { entity: item.entity, productKey: normKey, orderBatches: [], nonOrderBatches: [] };
     if (item.source === "order" && item.deliveredAt) {
       summaryMap[key].orderBatches.push(item);
     } else {
@@ -975,8 +982,9 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
     if (!demand.country || !demand.currentInventory) continue;
     for (const [pk, qty] of Object.entries(demand.currentInventory)) {
       if (!qty) continue;
-      const key = `${demand.country}||${pk}`;
-      if (!summaryMap[key]) summaryMap[key] = { entity: demand.country, productKey: pk, orderBatches: [], nonOrderBatches: [] };
+      const normPk = normalizeProductKey(pk);
+      const key = `${demand.country}||${normPk}`;
+      if (!summaryMap[key]) summaryMap[key] = { entity: demand.country, productKey: normPk, orderBatches: [], nonOrderBatches: [] };
     }
   }
 
@@ -984,8 +992,9 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
     const cKey = r.entity;
     const latestDemand = latestDemandByCountryESS[cKey];
     const baseDemandTimeSec = latestDemand?.submittedAt?.seconds ?? 0;
+    const allPKeys = [r.productKey, ...(productMap[r.productKey]?.keyHistory || [])];
 
-    const submittedCurrent = latestDemand?.currentInventory?.[r.productKey] ?? 0;
+    const submittedCurrent = allPKeys.reduce((val, k) => val ?? latestDemand?.currentInventory?.[k] ?? null, null) ?? 0;
     // Order batches received after the base demand submission (avoids double-counting initial stock)
     const orderBatchQty = r.orderBatches.filter(b => baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec).reduce((s, b) => s + (b.qty || 0), 0);
     const nonOrderBatchQty = r.nonOrderBatches.reduce((s, b) => s + (b.qty || 0), 0);
@@ -994,14 +1003,15 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
     // For expected demand, use current month demand
     const currentMonthDemand = currentMonthDemands.find(d => (d.country || "") === cKey);
     const resolvedMsg = currentMonthDemand ? messages.find(m =>
-      !m.type && m.productKey === r.productKey && m.period === CURRENT_MONTH &&
+      !m.type && allPKeys.includes(m.productKey) && m.period === CURRENT_MONTH &&
       m.toUserId === currentMonthDemand.userId &&
       (m.status === "resolved" || m.status === "admin_resolved")
     ) : null;
     const expectedDemand = resolvedMsg
       ? (resolvedMsg.resolvedQty ?? 0)
-      : currentMonthDemand ? (Number(currentMonthDemand[r.productKey]) || 0) : 0;
-    const desiredManual = (currentMonthDemand ?? latestDemand)?.desiredInventory?.[r.productKey] ?? null;
+      : currentMonthDemand ? (allPKeys.reduce((val, k) => val ?? (currentMonthDemand[k] != null ? Number(currentMonthDemand[k]) : null), null) ?? 0) : 0;
+    const baseDemandDoc = currentMonthDemand ?? latestDemand;
+    const desiredManual = allPKeys.reduce((val, k) => val ?? baseDemandDoc?.desiredInventory?.[k] ?? null, null);
 
     return {
       entity: r.entity, productKey: r.productKey,

@@ -168,7 +168,7 @@ function UploadMRPModal({ onClose, onImported }) {
 
   const findUnknownProductKeys = (rows) => {
     const unique = [...new Set(rows.map(r => r.productKey).filter(Boolean))];
-    return unique.filter(k => !knownProducts.some(p => p.key === k));
+    return unique.filter(k => !knownProducts.some(p => p.key === k || (p.keyHistory || []).includes(k)));
   };
 
   const parseFile = (file) => {

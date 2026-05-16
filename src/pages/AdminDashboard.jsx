@@ -351,16 +351,22 @@ function ArchivedRecordsModal({ onClose }) {
 }
 
 // ─── Product Info Modal ────────────────────────────────────────────────────────
-function ProductInfoModal({ product, onClose }) {
-  const [productId, setProductId] = useState(product.productId || "");
+function ProductInfoModal({ product, products, onClose }) {
+  const [productKey, setProductKey] = useState(product.key || "");
   const [notes, setNotes] = useState(product.notes || "");
   const [type, setType] = useState(product.type || "HF");
   const [shelfLifeMonths, setShelfLifeMonths] = useState(product.shelfLifeMonths != null ? String(product.shelfLifeMonths) : "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [shelfError, setShelfError] = useState("");
+  const [keyError, setKeyError] = useState("");
 
   const handleSave = async () => {
+    const trimmedKey = productKey.trim();
+    if (!trimmedKey) { setKeyError("Product Key is required."); return; }
+    const duplicate = (products || []).find(p => p.id !== product.id && p.key === trimmedKey);
+    if (duplicate) { setKeyError(`"${trimmedKey}" is already used by "${duplicate.name}".`); return; }
+    setKeyError("");
     const slm = shelfLifeMonths !== "" ? parseFloat(shelfLifeMonths) : null;
     if (slm === null || isNaN(slm) || slm <= 0) {
       setShelfError("Shelf life is required and must be a positive number.");
@@ -368,12 +374,12 @@ function ProductInfoModal({ product, onClose }) {
     }
     setShelfError("");
     setSaving(true);
-    await updateDoc(doc(db, "products", product.id), {
-      productId: productId.trim(),
-      notes: notes.trim(),
-      type,
-      shelfLifeMonths: slm,
-    });
+    const updates = { notes: notes.trim(), type, shelfLifeMonths: slm };
+    if (trimmedKey !== product.key) {
+      updates.key = trimmedKey;
+      updates.keyHistory = [...(product.keyHistory || []), product.key];
+    }
+    await updateDoc(doc(db, "products", product.id), updates);
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -408,15 +414,19 @@ function ProductInfoModal({ product, onClose }) {
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
-              Product-ID
+              Product Key <span className="text-red-500 ml-0.5">*</span>
             </label>
             <input
               type="text"
-              value={productId}
-              onChange={e => setProductId(e.target.value)}
+              value={productKey}
+              onChange={e => { setProductKey(e.target.value); setKeyError(""); }}
               placeholder="e.g. SKU-001"
-              className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm"
+              className={`w-full px-3 py-2.5 rounded-xl border text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] focus:border-transparent transition text-sm ${keyError ? "border-red-400 bg-red-50" : "border-gray-200"}`}
             />
+            {keyError && <p className="text-xs text-red-600 mt-1">{keyError}</p>}
+            {product.keyHistory?.length > 0 && (
+              <p className="text-xs text-gray-400 mt-1">Previous keys: {product.keyHistory.join(", ")}</p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
@@ -627,7 +637,7 @@ function FormatInfoModal({ onClose }) {
         <div className="space-y-3 mb-5">
           {[
             { col: "Column A", name: "Name", required: true, desc: 'The product display name. Also accepted: "Product Name".' },
-            { col: "Column B", name: "Product ID", required: false, desc: 'A short identifier such as a SKU. Also accepted: "ID", "Product-ID".' },
+            { col: "Column B", name: "Product Key", required: false, desc: 'The key used for import matching. Also accepted: "Key", "ProductKey". Auto-generated if omitted.' },
             { col: "Column C", name: "Notes", required: false, desc: 'Free-text notes about the product. Also accepted: "Note".' },
             { col: "Column D", name: "Type", required: false, desc: '"HF" (Halbfabrikat / semi-finished) or "FG" (Finished Good). Defaults to "HF" if omitted.' },
           ].map(({ col, name, required, desc }) => (
@@ -655,7 +665,7 @@ function FormatInfoModal({ onClose }) {
               <thead>
                 <tr className="border-b border-gray-100 bg-yellow-50">
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Name</th>
-                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Product ID</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Product Key</th>
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Notes</th>
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Type</th>
                 </tr>
@@ -726,7 +736,7 @@ function UploadProductsModal({ onClose }) {
 
         const header = rows[0].map(h => String(h).toLowerCase().trim());
         const nameIdx  = header.findIndex(h => ["name", "product name"].includes(h));
-        const idIdx    = header.findIndex(h => ["product id", "id", "product-id"].includes(h));
+        const keyIdx   = header.findIndex(h => ["product key", "key", "productkey"].includes(h));
         const notesIdx = header.findIndex(h => ["notes", "note"].includes(h));
         const typeIdx  = header.findIndex(h => ["type"].includes(h));
 
@@ -742,7 +752,7 @@ function UploadProductsModal({ onClose }) {
             return {
               _id: `p_${i}`,
               name: String(row[nameIdx] ?? "").trim(),
-              productId: idIdx >= 0 ? String(row[idIdx] ?? "").trim() : "",
+              productKey: keyIdx >= 0 ? String(row[keyIdx] ?? "").trim() : "",
               notes: notesIdx >= 0 ? String(row[notesIdx] ?? "").trim() : "",
               type: rawType === "FG" ? "FG" : "HF",
               included: true,
@@ -800,17 +810,23 @@ function UploadProductsModal({ onClose }) {
       });
 
       const toImport = parsedProducts.filter(p => p.included && p.name.trim());
+      const usedKeys = new Set(allDocs.map(p => p.key).filter(Boolean));
       for (const p of toImport) {
-        maxNum   += 1;
         maxOrder += 1;
+        let productKey = p.productKey?.trim();
+        if (!productKey || usedKeys.has(productKey)) {
+          maxNum += 1;
+          productKey = `product${maxNum}Tons`;
+        }
+        usedKeys.add(productKey);
         await addDoc(collection(db, "products"), {
-          name:      p.name.trim(),
-          productId: p.productId.trim(),
-          notes:     p.notes.trim(),
-          type:      p.type || "HF",
-          key:       `product${maxNum}Tons`,
-          order:     maxOrder,
-          createdAt: serverTimestamp(),
+          name:       p.name.trim(),
+          notes:      p.notes.trim(),
+          type:       p.type || "HF",
+          key:        productKey,
+          keyHistory: [],
+          order:      maxOrder,
+          createdAt:  serverTimestamp(),
         });
       }
       onClose();
@@ -899,7 +915,7 @@ function UploadProductsModal({ onClose }) {
                         <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                           Name <span className="text-red-400">*</span>
                         </th>
-                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Product ID</th>
+                        <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Product Key</th>
                         <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</th>
                         <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
                       </tr>
@@ -927,9 +943,9 @@ function UploadProductsModal({ onClose }) {
                           <td className="px-3 py-2">
                             <input
                               type="text"
-                              value={p.productId}
-                              onChange={e => updateProduct(p._id, "productId", e.target.value)}
-                              placeholder="e.g. SKU-001"
+                              value={p.productKey}
+                              onChange={e => updateProduct(p._id, "productKey", e.target.value)}
+                              placeholder="auto-generated if empty"
                               className="w-full px-2 py-1.5 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-1 focus:ring-[#4A9E4A] focus:border-transparent"
                             />
                           </td>
@@ -1070,10 +1086,10 @@ function ProductManagement() {
     const nextNum = products.length + 1;
     await addDoc(collection(db, "products"), {
       name: newName.trim(),
-      productId: "",
       notes: "",
       type: newType,
       key: `product${nextNum}Tons`,
+      keyHistory: [],
       order: maxOrder + 1,
       createdAt: serverTimestamp(),
     });
@@ -1238,6 +1254,7 @@ function ProductManagement() {
       {infoTarget && (
         <ProductInfoModal
           product={infoTarget}
+          products={products}
           onClose={() => setInfoTarget(null)}
         />
       )}
@@ -2101,7 +2118,11 @@ function DemandOverview() {
       if (!row.country) continue;
       if (row.period.trim().toLowerCase() !== dMonth) continue;
       if (row.country.trim().toLowerCase() !== effectiveCountry) continue;
-      const demandQty = Number(demand[row.productKey]);
+      // Match MRP key to a product via current key or historical keys
+      const product = products.find(p => p.key === row.productKey || (p.keyHistory || []).includes(row.productKey));
+      const allKeys = product ? [product.key, ...(product.keyHistory || [])] : [row.productKey];
+      let demandQty = NaN;
+      for (const k of allKeys) { if (demand[k] != null) { demandQty = Number(demand[k]); break; } }
       const mrpQty = typeof row.suggestedQty === "number" ? row.suggestedQty : parseFloat(row.suggestedQty) || 0;
       if (!isNaN(demandQty) && Math.abs(demandQty - mrpQty) > 0.001) {
         out.push({ productKey: row.productKey, mrpQty, demandQty });
@@ -2122,16 +2143,18 @@ function DemandOverview() {
   const activeDemands = demands.filter(d => !d.archived);
   const filtered = activeDemands.filter(d => d.month === selectedMonth);
 
-  // Use resolvedQty when a discrepancy was resolved (either party chose MRP or demand value)
-  const getEffectiveQty = (demand, productKey) => {
-    const res = getResolution(demand.userId, productKey, demand.month);
+  // Use resolvedQty when a discrepancy was resolved; check all historical keys for older submissions
+  const getEffectiveQty = (demand, product) => {
+    const allKeys = typeof product === "string" ? [product] : [product.key, ...(product.keyHistory || [])];
+    const res = allKeys.map(k => getResolution(demand.userId, k, demand.month)).find(r => r != null);
     if (res?.resolvedQty != null) return res.resolvedQty;
-    return Number(demand[productKey]) || 0;
+    for (const k of allKeys) { if (demand[k] != null) return Number(demand[k]) || 0; }
+    return 0;
   };
 
   const aggregated = {};
   products.forEach(p => {
-    aggregated[p.key] = filtered.reduce((s, d) => s + getEffectiveQty(d, p.key), 0);
+    aggregated[p.key] = filtered.reduce((s, d) => s + getEffectiveQty(d, p), 0);
   });
 
   if (loading || !productsLoaded) return (

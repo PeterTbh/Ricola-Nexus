@@ -325,7 +325,9 @@ function WasteRecordModal({ userProfile, products, inventory, currentUser, waste
   const [saved, setSaved] = useState(false);
   const [undoing, setUndoing] = useState(null);
 
-  const productBatches = currentBatches.filter(b => b.productKey === selectedProduct);
+  const selectedProductObj = products.find(p => p.key === selectedProduct);
+  const selectedProductAllKeys = selectedProductObj ? [selectedProductObj.key, ...(selectedProductObj.keyHistory || [])] : [selectedProduct];
+  const productBatches = currentBatches.filter(b => selectedProductAllKeys.includes(b.productKey));
   const selectedBatch = productBatches.find(b => b.id === selectedBatchId);
 
   const sortedHistory = [...(wasteRecords || [])].sort(
@@ -524,12 +526,13 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
 
   const ledger = products.map(product => {
     const pKey = product.key;
+    const allPKeys = [pKey, ...(product.keyHistory || [])];
     const shelfLife = product.shelfLifeMonths ?? null;
-    const productOrderBatches = orderBatches.filter(b => b.productKey === pKey);
+    const productOrderBatches = orderBatches.filter(b => allPKeys.includes(b.productKey));
     const hasAnyOrders = productOrderBatches.length > 0;
 
     // Compute a stable expiry for initial/manual stock — treated as earliest in FIFO
-    const initBatch = initialBatches.find(b => b.productKey === pKey);
+    const initBatch = initialBatches.find(b => allPKeys.includes(b.productKey));
     let manualExpiry = null;
     if (shelfLife) {
       const seed = initBatch?.id || initBatch?.batchId || pKey;
@@ -543,7 +546,8 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
     for (let i = 0; i < sortedDemands.length; i++) {
       const demandM = sortedDemands[i];
       const demandNext = sortedDemands[i + 1] ?? null;
-      const openingStock = demandM.currentInventory?.[pKey] ?? null;
+      // Check opening stock under current key or any historical key
+      const openingStock = allPKeys.reduce((val, k) => val ?? demandM.currentInventory?.[k] ?? null, null);
       if (openingStock === null) { prevRow = null; continue; }
 
       const ordersIn = productOrderBatches.filter(b => batchBelongsToPeriod(b, demandM.month)).reduce((s, b) => s + origQty(b), 0);
@@ -553,7 +557,7 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
       const demDate = parseMonthToDate(demandM.month);
       const nextDate = demandNext ? parseMonthToDate(demandNext.month) : null;
       const periodWaste = wasteRecords.filter(w => {
-        if (w.productKey !== pKey) return false;
+        if (!allPKeys.includes(w.productKey)) return false;
         const wDate = parseMonthToDate(w.month);
         return wDate >= demDate && (nextDate === null || wDate < nextDate);
       });
@@ -569,10 +573,10 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
       }
 
       const postDelivery = openingStock + ordersIn;
-      const closingStock = demandNext?.currentInventory?.[pKey] ?? null;
+      const closingStock = demandNext ? allPKeys.reduce((val, k) => val ?? demandNext.currentInventory?.[k] ?? null, null) : null;
       const consumption = closingStock !== null ? Math.max(0, postDelivery - closingStock - wasteQty) : null;
-      const resolvedMsg = messages.find(m => m.productKey === pKey && m.period === demandM.month && (m.status === "resolved" || m.status === "admin_resolved"));
-      const submittedDemand = demandM[pKey] ?? null;
+      const resolvedMsg = messages.find(m => allPKeys.includes(m.productKey) && m.period === demandM.month && (m.status === "resolved" || m.status === "admin_resolved"));
+      const submittedDemand = allPKeys.reduce((val, k) => val ?? (demandM[k] !== undefined ? demandM[k] : null), null);
       const effectiveDemand = resolvedMsg?.resolvedQty ?? submittedDemand;
       // Sort by expiry ascending so earliest-expiring batches are displayed first (FIFO)
       const periodBatches = productOrderBatches
@@ -811,15 +815,16 @@ function CountryInventoryTab({ userProfile, products }) {
   const baseDemand = currentDemand ?? latestDemand;
   const baseDemandTimeSec = baseDemand?.submittedAt?.seconds ?? 0;
 
-  const getExpectedDemand = (productKey) => {
+  const getExpectedDemand = (productKey, allPKeys = [productKey]) => {
     const resolvedMsg = messages.find(m =>
-      !m.type && m.productKey === productKey && m.period === MONTH &&
+      !m.type && allPKeys.includes(m.productKey) && m.period === MONTH &&
       (m.status === "resolved" || m.status === "admin_resolved")
     );
     if (resolvedMsg) return { qty: resolvedMsg.resolvedQty ?? 0, source: "resolved" };
-    if (currentDemand?.[productKey] != null) return { qty: Number(currentDemand[productKey]) || 0, source: "submitted" };
+    const submittedQty = allPKeys.reduce((val, k) => val ?? (currentDemand?.[k] != null ? Number(currentDemand[k]) : null), null);
+    if (submittedQty !== null) return { qty: submittedQty || 0, source: "submitted" };
     if (activeMrp?.rows) {
-      const row = activeMrp.rows.find(r => r.productKey === productKey && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
+      const row = activeMrp.rows.find(r => allPKeys.includes(r.productKey) && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
       if (row) return { qty: parseFloat(row.suggestedQty) || 0, source: "mrp" };
     }
     return { qty: 0, source: "none" };
@@ -828,21 +833,22 @@ function CountryInventoryTab({ userProfile, products }) {
   const currentBatchItems = inventory.filter(i => !i.levelType || i.levelType === "current");
 
   const productGroups = products.map(p => {
-    const batches = currentBatchItems.filter(i => i.productKey === p.key);
+    const allPKeys = [p.key, ...(p.keyHistory || [])];
+    const batches = currentBatchItems.filter(i => allPKeys.includes(i.productKey));
     // Only count order batches received after the base demand submission to avoid double-counting
     const receivedOrderQty = batches.filter(b => b.source === "order" && b.deliveredAt && (baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec)).reduce((s, b) => s + (b.qty || 0), 0);
-    // Use latest demand (not just current month) so initial inventory isn't lost when no current-month submission exists
-    const submittedCurrentQty = baseDemand?.currentInventory?.[p.key] ?? null;
+    // Check current inventory under current key or any historical key
+    const submittedCurrentQty = allPKeys.reduce((val, k) => val ?? baseDemand?.currentInventory?.[k] ?? null, null);
     const totalCurrentQty = (submittedCurrentQty ?? 0) + receivedOrderQty;
 
     const expiries = batches.map(b => getComputedExpiry(b, p.shelfLifeMonths)).filter(Boolean);
     const earliestExpiry = expiries.length > 0 ? expiries.reduce((min, d) => d < min ? d : min) : null;
 
-    const desiredManual = currentDemand?.desiredInventory?.[p.key] ?? null;
-    const desiredMrpRow = activeMrp?.rows?.find(r => r.productKey === p.key && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
+    const desiredManual = allPKeys.reduce((val, k) => val ?? currentDemand?.desiredInventory?.[k] ?? null, null);
+    const desiredMrpRow = activeMrp?.rows?.find(r => allPKeys.includes(r.productKey) && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
     const desiredMrp = desiredMrpRow?.desiredQty != null ? parseFloat(desiredMrpRow.desiredQty) : null;
 
-    const { qty: expectedDemandQty, source: demandSource } = getExpectedDemand(p.key);
+    const { qty: expectedDemandQty, source: demandSource } = getExpectedDemand(p.key, allPKeys);
     const safetyStock = totalCurrentQty - expectedDemandQty;
 
     return { product: p, batches, receivedOrderQty, submittedCurrentQty, totalCurrentQty, earliestExpiry, desiredManual, desiredMrp, expectedDemandQty, demandSource, safetyStock };
