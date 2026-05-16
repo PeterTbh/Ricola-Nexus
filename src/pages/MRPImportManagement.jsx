@@ -723,7 +723,7 @@ function ActivationValidationModal({ imp, imports, onClose, onActivated }) {
 
       const rows = imp.rows || [];
       const uniqueKeys = [...new Set(rows.map(r => r.productKey).filter(Boolean))];
-      const ukKeys = uniqueKeys.filter(k => !products.some(p => p.key === k));
+      const ukKeys = uniqueKeys.filter(k => !products.some(p => p.key === k || (p.keyHistory || []).includes(k)));
 
       // A country is "recognized" if an approved user has it (case-insensitive) — only user countries matter for discrepancy matching
       const userCountriesLower = fromUsers.map(c => c.trim().toLowerCase());

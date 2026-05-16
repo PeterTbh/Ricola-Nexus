@@ -2063,31 +2063,37 @@ export default function CountryHeadDashboard() {
                       {products.map((p) => {
                         const allPKeys = [p.key, ...(p.keyHistory || [])];
                         const submittedVal = allPKeys.reduce((val, k) => val ?? (existingDoc[k] != null ? Number(existingDoc[k]) : null), null) ?? 0;
+                        const adminNoteKey = allPKeys.find(k => existingDoc[`adminNote_${k}`]);
                         return (
-                        <div key={p.key} className="bg-gray-50 rounded-xl p-4 text-center border border-gray-100">
-                          <div className="flex items-center justify-center gap-1 mb-1">
-                            <p className="text-xs text-gray-500 font-medium">{p.name}</p>
-                            <button type="button" onClick={() => setInfoProduct(p)} title="Product information" className="text-gray-300 hover:text-[#2D6A2D] transition-colors"><Info className="w-3 h-3" /></button>
+                          <div key={p.key} className="bg-gray-50 rounded-xl p-4 text-center border border-gray-100">
+                            <div className="flex items-center justify-center gap-1 mb-1">
+                              <p className="text-xs text-gray-500 font-medium">{p.name}</p>
+                              <button type="button" onClick={() => setInfoProduct(p)} title="Product information" className="text-gray-300 hover:text-[#2D6A2D] transition-colors"><Info className="w-3 h-3" /></button>
+                            </div>
+                            <p className="text-2xl font-bold text-[#2D6A2D]">{submittedVal.toFixed(2)}</p>
+                            <p className="text-xs text-gray-400 mt-0.5">tons</p>
+                            {adminNoteKey && (
+                              <p className="text-xs text-amber-600 mt-1 leading-tight">{existingDoc[`adminNote_${adminNoteKey}`]}</p>
+                            )}
                           </div>
-                          <p className="text-2xl font-bold text-[#2D6A2D]">{submittedVal.toFixed(2)}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">tons</p>
-                          {existingDoc[`adminNote_${p.key}`] && (
-                            <p className="text-xs text-amber-600 mt-1 leading-tight">{existingDoc[`adminNote_${p.key}`]}</p>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                     {existingDoc.currentInventory && (
                       <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-4 mb-4">
                         <p className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-3">Current Inventory</p>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          {products.map(p => (
-                            <div key={p.key} className="bg-white rounded-lg p-3 text-center border border-blue-100">
-                              <p className="text-xs text-gray-500 mb-1">{p.name}</p>
-                              <p className="text-lg font-bold text-blue-700">{Number(existingDoc.currentInventory[p.key] ?? 0).toFixed(2)}</p>
-                              <p className="text-xs text-gray-400">t</p>
-                            </div>
-                          ))}
+                          {products.map(p => {
+                            const allPKeys = [p.key, ...(p.keyHistory || [])];
+                            const val = allPKeys.reduce((v, k) => v ?? existingDoc.currentInventory[k] ?? null, null) ?? 0;
+                            return (
+                              <div key={p.key} className="bg-white rounded-lg p-3 text-center border border-blue-100">
+                                <p className="text-xs text-gray-500 mb-1">{p.name}</p>
+                                <p className="text-lg font-bold text-blue-700">{Number(val).toFixed(2)}</p>
+                                <p className="text-xs text-gray-400">t</p>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -2095,15 +2101,18 @@ export default function CountryHeadDashboard() {
                       <div className="rounded-xl border border-purple-100 bg-purple-50/30 p-4 mb-4">
                         <p className="text-xs font-bold text-purple-700 uppercase tracking-wider mb-3">Desired Inventory</p>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          {products.map(p => (
-                            existingDoc.desiredInventory[p.key] != null && (
+                          {products.map(p => {
+                            const allPKeys = [p.key, ...(p.keyHistory || [])];
+                            const val = allPKeys.reduce((v, k) => v ?? existingDoc.desiredInventory[k] ?? null, null);
+                            if (val == null) return null;
+                            return (
                               <div key={p.key} className="bg-white rounded-lg p-3 text-center border border-purple-100">
                                 <p className="text-xs text-gray-500 mb-1">{p.name}</p>
-                                <p className="text-lg font-bold text-purple-700">{Number(existingDoc.desiredInventory[p.key]).toFixed(2)}</p>
+                                <p className="text-lg font-bold text-purple-700">{Number(val).toFixed(2)}</p>
                                 <p className="text-xs text-gray-400">t</p>
                               </div>
-                            )
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     )}

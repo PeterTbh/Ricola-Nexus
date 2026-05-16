@@ -1285,9 +1285,15 @@ function CountryHistoryModal({ userId, username, demands, products, onClose }) {
   const productColors = products.map((_, i) => ALL_COLORS[i % ALL_COLORS.length]);
   const productLabels = products.map(p => p.name);
 
+  const pickProductQty = (d, p) => {
+    const allPKeys = [p.key, ...(p.keyHistory || [])];
+    for (const k of allPKeys) if (d[k] != null) return Number(d[k]) || 0;
+    return 0;
+  };
+
   const chartGroups = userDemands.map(d => ({
     label: shortMonthLabel(d.month),
-    values: products.map(p => Number(d[p.key]) || 0),
+    values: products.map(p => pickProductQty(d, p)),
   }));
 
   return (
@@ -1357,13 +1363,13 @@ function CountryHistoryModal({ userId, username, demands, products, onClose }) {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {tableRows.map(d => {
-                    const total = products.reduce((s, p) => s + (Number(d[p.key]) || 0), 0);
+                    const total = products.reduce((s, p) => s + pickProductQty(d, p), 0);
                     const submittedAt = d.submittedAt?.toDate?.();
                     return (
                       <tr key={d.id} className="hover:bg-gray-50">
                         <td className="py-3 font-medium text-gray-800">{d.month}</td>
                         {products.map(p => (
-                          <td key={p.key} className="py-3 text-right tabular-nums text-gray-700">{Number(d[p.key] || 0).toFixed(2)}</td>
+                          <td key={p.key} className="py-3 text-right tabular-nums text-gray-700">{pickProductQty(d, p).toFixed(2)}</td>
                         ))}
                         <td className="py-3 text-right tabular-nums font-semibold text-[#2D6A2D]">{total.toFixed(2)}</td>
                         <td className="py-3 text-xs text-gray-400">
@@ -1392,13 +1398,16 @@ function CountryHistoryModal({ userId, username, demands, products, onClose }) {
 }
 
 // ─── Product History Modal (aggregated view card click) ────────────────────────
-function ProductHistoryModal({ productKey, productLabel, productColor, demands, onClose }) {
+function ProductHistoryModal({ productKey, productKeyHistory = [], productLabel, productColor, demands, onClose }) {
+  const allPKeys = [productKey, ...(productKeyHistory || [])];
   const monthMap = {};
   demands
     .filter(d => !d.archived)
     .forEach(d => {
       if (!monthMap[d.month]) monthMap[d.month] = 0;
-      monthMap[d.month] += Number(d[productKey]) || 0;
+      let v = 0;
+      for (const k of allPKeys) { if (d[k] != null) { v = Number(d[k]) || 0; break; } }
+      monthMap[d.month] += v;
     });
 
   const monthlyData = Object.entries(monthMap)
@@ -1972,17 +1981,22 @@ function ActiveAccounts() {
 function downloadIndividualExcel(filtered, selectedMonth, products) {
   // Transposed layout: rows = products, columns = country heads
   const header = ["Product Name", "Product ID", ...filtered.map(d => d.username)];
+  const pickQty = (d, p) => {
+    const allPKeys = [p.key, ...(p.keyHistory || [])];
+    for (const k of allPKeys) if (d[k] != null) return Number(d[k]) || 0;
+    return 0;
+  };
 
   const productRows = products.map(p => [
     p.name,
     p.productId || "",
-    ...filtered.map(d => Number(d[p.key]) || 0),
+    ...filtered.map(d => pickQty(d, p)),
   ]);
 
   const totalsRow = [
     "Total (tons)",
     "",
-    ...filtered.map(d => products.reduce((s, p) => s + (Number(d[p.key]) || 0), 0)),
+    ...filtered.map(d => products.reduce((s, p) => s + pickQty(d, p), 0)),
   ];
 
   const submittedAtRow = [
@@ -2167,6 +2181,7 @@ function DemandOverview() {
     const style = CARD_STYLES[i % CARD_STYLES.length];
     return {
       key: p.key,
+      keyHistory: p.keyHistory || [],
       label: p.name,
       value: aggregated[p.key] || 0,
       color: ALL_COLORS[i % ALL_COLORS.length],
@@ -2229,10 +2244,10 @@ function DemandOverview() {
           <>
             <p className="text-xs text-gray-400">Click a product card to see its monthly trend.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {productCards.map(({ key, label, value, color, cardColor, text, accent }) => (
+              {productCards.map(({ key, keyHistory, label, value, color, cardColor, text, accent }) => (
                 <button
                   key={label}
-                  onClick={() => setProductHistoryTarget({ key, label, color })}
+                  onClick={() => setProductHistoryTarget({ key, keyHistory, label, color })}
                   className={`border rounded-xl p-5 ${cardColor} text-left hover:shadow-md transition-shadow cursor-pointer group`}
                 >
                   <div className={`inline-flex items-center justify-center w-10 h-10 rounded-lg ${accent} mb-3`}>
@@ -2274,7 +2289,7 @@ function DemandOverview() {
                     </thead>
                     <tbody className="divide-y divide-gray-100">
                       {filtered.map(d => {
-                        const total = products.reduce((s, p) => s + getEffectiveQty(d, p.key), 0);
+                        const total = products.reduce((s, p) => s + getEffectiveQty(d, p), 0);
                         const submittedAt = d.submittedAt?.toDate?.();
                         const discrepancies = getDemandDiscrepancies(d);
                         const hasDiscrepancy = discrepancies.length > 0;
@@ -2302,14 +2317,16 @@ function DemandOverview() {
                               </div>
                             </td>
                             {products.map(p => {
-                              const disc = discrepancies.find(x => x.productKey === p.key);
-                              const resolution = getResolution(d.userId, p.key, d.month);
+                              const allPKeys = [p.key, ...(p.keyHistory || [])];
+                              const disc = discrepancies.find(x => allPKeys.includes(x.productKey));
+                              const resolution = allPKeys.map(k => getResolution(d.userId, k, d.month)).find(r => r != null);
+                              const rawVal = allPKeys.reduce((v, k) => v ?? (d[k] != null ? Number(d[k]) : null), null) ?? 0;
                               return (
                                 <td key={p.key} className="px-4 py-3 text-right text-gray-700 tabular-nums">
                                   {resolution?.resolvedQty != null ? (
                                     <span className="text-green-600 font-semibold">{resolution.resolvedQty.toFixed(2)}</span>
                                   ) : (
-                                    <span>{Number(d[p.key] || 0).toFixed(2)}</span>
+                                    <span>{rawVal.toFixed(2)}</span>
                                   )}
                                   {disc && !resolution && (
                                     <span className="ml-1 text-xs text-amber-600" title={`MRP: ${disc.mrpQty.toFixed(2)}t`}>
@@ -2371,6 +2388,7 @@ function DemandOverview() {
       {productHistoryTarget && (
         <ProductHistoryModal
           productKey={productHistoryTarget.key}
+          productKeyHistory={productHistoryTarget.keyHistory || []}
           productLabel={productHistoryTarget.label}
           productColor={productHistoryTarget.color}
           demands={activeDemands}
@@ -2795,8 +2813,13 @@ function DiscrepanciesSection() {
   }, []);
 
   const productName = (key) => {
-    const p = products.find(p => p.key === key);
+    const p = products.find(p => p.key === key || (p.keyHistory || []).includes(key));
     return p ? p.name : key;
+  };
+
+  const productAllKeys = (key) => {
+    const p = products.find(p => p.key === key || (p.keyHistory || []).includes(key));
+    return p ? [p.key, ...(p.keyHistory || [])] : [key];
   };
 
   const getDiscrepancyKey = (row, demand) =>
@@ -2809,18 +2832,20 @@ function DiscrepanciesSection() {
       const rowCountry = row.country.trim().toLowerCase();
       const rowPeriod = row.period.trim().toLowerCase();
       const mrpQty = typeof row.suggestedQty === "number" ? row.suggestedQty : parseFloat(row.suggestedQty) || 0;
+      const allKeys = productAllKeys(row.productKey);
       const matchingDemands = demands.filter(d => {
         const effectiveCountry = (d.country?.trim() || usersMap[d.userId]?.country?.trim() || "").toLowerCase();
         return d.month?.trim().toLowerCase() === rowPeriod && effectiveCountry === rowCountry;
       });
       for (const demand of matchingDemands) {
-        const demandQty = demand[row.productKey];
+        let demandQty;
+        for (const k of allKeys) { if (demand[k] != null) { demandQty = demand[k]; break; } }
         if (demandQty === undefined || demandQty === null) continue;
         const dq = Number(demandQty);
         if (!isNaN(dq) && Math.abs(dq - mrpQty) > 0.001) {
           const existingMsg = messages.find(m =>
             !m.type &&
-            m.productKey === row.productKey &&
+            allKeys.includes(m.productKey) &&
             m.period?.trim().toLowerCase() === rowPeriod &&
             m.toUserCountry?.trim().toLowerCase() === rowCountry &&
             m.toUserId === demand.userId
@@ -2849,19 +2874,21 @@ function DiscrepanciesSection() {
       const rowCountry = row.country.trim().toLowerCase();
       const rowPeriod = row.period.trim().toLowerCase();
       const mrpInvQty = Number(row.currentInventoryQty) || 0;
+      const allKeys = productAllKeys(row.productKey);
       const matchingDemands = demands.filter(d => {
         const effectiveCountry = (d.country?.trim() || usersMap[d.userId]?.country?.trim() || "").toLowerCase();
         return d.month?.trim().toLowerCase() === rowPeriod && effectiveCountry === rowCountry;
       });
       for (const demand of matchingDemands) {
         if (!demand.currentInventory) continue;
-        const demandInvQty = demand.currentInventory[row.productKey];
+        let demandInvQty;
+        for (const k of allKeys) { if (demand.currentInventory[k] != null) { demandInvQty = demand.currentInventory[k]; break; } }
         if (demandInvQty === undefined || demandInvQty === null) continue;
         const diq = Number(demandInvQty);
         if (!isNaN(diq) && Math.abs(diq - mrpInvQty) > 0.001) {
           const existingMsg = messages.find(m =>
             m.type === "inventory_discrepancy" &&
-            m.productKey === row.productKey &&
+            allKeys.includes(m.productKey) &&
             m.period?.trim().toLowerCase() === rowPeriod &&
             m.toUserCountry?.trim().toLowerCase() === rowCountry &&
             m.toUserId === demand.userId
@@ -3190,23 +3217,25 @@ function CreateOrderModal({ country, countryUserId, products, activeMrp, current
   }, [countryUserId]);
 
   const getCalcQty = (productKey) => {
+    const product = products.find(p => p.key === productKey || (p.keyHistory || []).includes(productKey));
+    const allPKeys = product ? [product.key, ...(product.keyHistory || [])] : [productKey];
     const thisMonthDemand = countryDemands.find(d => d.month === CURRENT_MONTH_STR);
-    const baseCurrent = thisMonthDemand?.currentInventory?.[productKey] ?? 0;
-    const receivedOrderQty = countryInventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && i.productKey === productKey).reduce((s, b) => s + (b.qty || 0), 0);
+    const baseCurrent = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.currentInventory?.[k] ?? null, null) ?? 0;
+    const receivedOrderQty = countryInventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey)).reduce((s, b) => s + (b.qty || 0), 0);
     const currentQty = baseCurrent + receivedOrderQty;
-    const desiredQty = thisMonthDemand?.desiredInventory?.[productKey] ?? 0;
+    const desiredQty = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.desiredInventory?.[k] ?? null, null) ?? 0;
     // Use resolved demand if discrepancy was resolved
     const resolvedMsg = countryMessages.find(m =>
-      !m.type && m.productKey === productKey && m.period === CURRENT_MONTH_STR &&
+      !m.type && allPKeys.includes(m.productKey) && m.period === CURRENT_MONTH_STR &&
       (m.status === "resolved" || m.status === "admin_resolved")
     );
     let expectedDemand;
     if (resolvedMsg) {
       expectedDemand = resolvedMsg.resolvedQty ?? 0;
     } else {
-      expectedDemand = thisMonthDemand ? (Number(thisMonthDemand[productKey]) || 0) : 0;
+      expectedDemand = thisMonthDemand ? (allPKeys.reduce((val, k) => val ?? (thisMonthDemand[k] != null ? Number(thisMonthDemand[k]) : null), null) ?? 0) : 0;
       if (!expectedDemand && activeMrp?.rows) {
-        const mrpRow = activeMrp.rows.find(r => r.productKey === productKey && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
+        const mrpRow = activeMrp.rows.find(r => allPKeys.includes(r.productKey) && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
         if (mrpRow) expectedDemand = typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty) || 0;
       }
     }
@@ -3455,6 +3484,8 @@ function OrdersSection() {
 
   // Helper: compute calculated order qty for a country+product (mirrors CalculatedOrderTab)
   const computeCalcQty = (country, productKey) => {
+    const product = products.find(p => p.key === productKey || (p.keyHistory || []).includes(productKey));
+    const allPKeys = product ? [product.key, ...(product.keyHistory || [])] : [productKey];
     const countryUserIds = users.filter(u => u.country === country).map(u => u.id);
     const thisMonthDemand = demands.find(d =>
       d.month === CURRENT_MONTH_ORD && (
@@ -3462,16 +3493,16 @@ function OrdersSection() {
         (d.country || "").trim().toLowerCase() === country.trim().toLowerCase()
       )
     );
-    const baseCurrent = thisMonthDemand?.currentInventory?.[productKey] ?? 0;
+    const baseCurrent = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.currentInventory?.[k] ?? null, null) ?? 0;
     const receivedOrderQty = inventory.filter(i =>
       (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt &&
-      i.productKey === productKey && i.entity?.trim().toLowerCase() === country.trim().toLowerCase()
+      allPKeys.includes(i.productKey) && i.entity?.trim().toLowerCase() === country.trim().toLowerCase()
     ).reduce((s, b) => s + (b.qty || 0), 0);
     const currentQty = baseCurrent + receivedOrderQty;
-    const desiredQty = thisMonthDemand?.desiredInventory?.[productKey] ?? 0;
+    const desiredQty = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.desiredInventory?.[k] ?? null, null) ?? 0;
     const countryUserId = countryUserIds[0] || null;
     const resolvedMsg = countryUserId ? messages.find(m =>
-      !m.type && m.productKey === productKey && m.period === CURRENT_MONTH_ORD &&
+      !m.type && allPKeys.includes(m.productKey) && m.period === CURRENT_MONTH_ORD &&
       m.toUserId === countryUserId &&
       (m.status === "resolved" || m.status === "admin_resolved")
     ) : null;
@@ -3479,10 +3510,10 @@ function OrdersSection() {
     if (resolvedMsg) {
       expectedDemand = resolvedMsg.resolvedQty ?? 0;
     } else {
-      expectedDemand = thisMonthDemand ? (Number(thisMonthDemand[productKey]) || 0) : 0;
+      expectedDemand = thisMonthDemand ? (allPKeys.reduce((val, k) => val ?? (thisMonthDemand[k] != null ? Number(thisMonthDemand[k]) : null), null) ?? 0) : 0;
       if (!expectedDemand && activeMrp?.rows) {
         const mrpRow = activeMrp.rows.find(r =>
-          r.productKey === productKey && r.country?.trim().toLowerCase() === country.trim().toLowerCase()
+          allPKeys.includes(r.productKey) && r.country?.trim().toLowerCase() === country.trim().toLowerCase()
         );
         if (mrpRow) expectedDemand = typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty) || 0;
       }
@@ -3735,9 +3766,10 @@ function OrdersSection() {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {products.map(p => {
-                    const sumAll = filteredOrders.reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
-                    const sumOpen = filteredOrders.filter(o => o.status === "open").reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
-                    const sumReceived = filteredOrders.filter(o => o.status === "received").reduce((s, o) => s + ((o.items || []).find(it => it.productKey === p.key)?.orderedQty ?? 0), 0);
+                    const allPKeys = [p.key, ...(p.keyHistory || [])];
+                    const sumAll = filteredOrders.reduce((s, o) => s + ((o.items || []).find(it => allPKeys.includes(it.productKey))?.orderedQty ?? 0), 0);
+                    const sumOpen = filteredOrders.filter(o => o.status === "open").reduce((s, o) => s + ((o.items || []).find(it => allPKeys.includes(it.productKey))?.orderedQty ?? 0), 0);
+                    const sumReceived = filteredOrders.filter(o => o.status === "received").reduce((s, o) => s + ((o.items || []).find(it => allPKeys.includes(it.productKey))?.orderedQty ?? 0), 0);
                     return (
                       <tr key={p.key} className="bg-white">
                         <td className="px-4 py-2.5 font-medium text-gray-800">{p.name}</td>
@@ -3817,7 +3849,7 @@ function OrdersSection() {
                         </thead>
                         <tbody className="divide-y divide-gray-50">
                           {(order.items || []).map(item => {
-                            const prod = products.find(p => p.key === item.productKey);
+                            const prod = products.find(p => p.key === item.productKey || (p.keyHistory || []).includes(item.productKey));
                             return (
                               <tr key={item.productKey}>
                                 <td className="px-3 py-2.5 font-medium text-gray-800">{prod?.name ?? item.productKey}</td>
