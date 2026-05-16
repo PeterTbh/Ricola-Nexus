@@ -8,7 +8,7 @@ import { db } from "../firebase";
 import {
   Plus, Pencil, Trash2, Save, X, Upload, Loader2,
   AlertCircle, HelpCircle, Layers, ChevronDown, ChevronRight,
-  Info, Package, Clock, AlertTriangle
+  Info, Package, Clock, AlertTriangle, TrendingDown
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -27,15 +27,34 @@ function remainingMonths(expiryDate) {
   return diffMs / (1000 * 60 * 60 * 24 * 30.44);
 }
 
+function defaultMarchDelivery(batchId) {
+  let h = 0;
+  for (const c of (batchId || "x")) h = ((h << 5) - h) + c.charCodeAt(0);
+  return new Date(2026, 2, (Math.abs(h) % 28) + 1);
+}
+
+function batchBelongsToPeriodIM(batch, monthStr, monthsList) {
+  if (batch.period) return batch.period === monthStr;
+  const d = batch.deliveredAt?.toDate?.() ?? (batch.deliveredAt instanceof Date ? batch.deliveredAt : null);
+  if (!d) return false;
+  const [mName, mYear] = monthStr.split(" ");
+  return d.getFullYear() === Number(mYear) && monthsList.indexOf(mName) === d.getMonth();
+}
+
 function computeExpiry(batch, shelfLifeMonths) {
   if (batch.expiryDate) return batch.expiryDate.toDate?.() ?? batch.expiryDate;
-  if (batch.deliveredAt && shelfLifeMonths) {
-    const base = batch.deliveredAt.toDate?.() ?? batch.deliveredAt;
-    if (base) {
-      const exp = new Date(base);
-      exp.setMonth(exp.getMonth() + shelfLifeMonths);
-      return exp;
-    }
+  const base = batch.deliveredAt?.toDate?.() ?? batch.deliveredAt;
+  if (base && shelfLifeMonths) {
+    const exp = new Date(base);
+    exp.setMonth(exp.getMonth() + shelfLifeMonths);
+    return exp;
+  }
+  // Initial inventory with no receipt timestamp: use deterministic March 2026 delivery date
+  if (!batch.deliveredAt && batch.source !== "order" && shelfLifeMonths) {
+    const march = defaultMarchDelivery(batch.id || batch.batchId || "x");
+    const exp = new Date(march);
+    exp.setMonth(exp.getMonth() + shelfLifeMonths);
+    return exp;
   }
   return null;
 }
@@ -673,19 +692,29 @@ function StockLevelsTab({ items, products, loading, demands }) {
 
   const productMap = Object.fromEntries(products.map(p => [p.key, p]));
 
+  // Use the most recent demand per country so initial inventory isn't lost when no current-month submission exists
+  const latestDemandByCountrySL = {};
+  for (const d of (demands || [])) {
+    if (!d.country || !d.currentInventory) continue;
+    const cur = latestDemandByCountrySL[d.country];
+    if (!cur || (d.submittedAt?.seconds ?? 0) > (cur.submittedAt?.seconds ?? 0)) {
+      latestDemandByCountrySL[d.country] = d;
+    }
+  }
+
   // Build summary rows: one per (entity, productKey)
-  // Sources: inventory collection batches (levelType=current) + demand.currentInventory submissions
+  // Sources: inventory collection batches (levelType=current) + demand.currentInventory from latest submission
   const summaryMap = {};
   for (const item of items) {
     if (item.levelType && item.levelType !== "current") continue;
     const key = `${item.entity}||${item.productKey}`;
     if (!summaryMap[key]) {
-      summaryMap[key] = { entity: item.entity, productKey: item.productKey, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null };
+      summaryMap[key] = { entity: item.entity, productKey: item.productKey, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null, _baseDemandTimeSec: 0 };
     }
     summaryMap[key].currentBatches.push(item);
   }
-  // Merge in demand-submitted current inventory (manual submissions)
-  for (const demand of (demands || [])) {
+  // Merge in demand-submitted current inventory (latest submission per country)
+  for (const demand of Object.values(latestDemandByCountrySL)) {
     const country = demand.country;
     if (!country || !demand.currentInventory) continue;
     for (const [pk, qty] of Object.entries(demand.currentInventory)) {
@@ -697,14 +726,19 @@ function StockLevelsTab({ items, products, loading, demands }) {
       summaryMap[key].submittedQty += Number(qty) || 0;
       summaryMap[key].demandDoc = demand;
       summaryMap[key].submittedExpiry = demand.currentInventoryExpiry?.[pk] ?? null;
+      summaryMap[key]._baseDemandTimeSec = demand.submittedAt?.seconds ?? 0;
     }
   }
 
-  let rows = Object.values(summaryMap).map(r => ({
-    ...r,
-    currentQty: r.currentBatches.reduce((s, b) => s + (b.qty || 0), 0) + r.submittedQty,
-    productName: productMap[r.productKey]?.name ?? r.productKey,
-  }));
+  let rows = Object.values(summaryMap).map(r => {
+    const baseSec = r._baseDemandTimeSec ?? 0;
+    // Only count order batches received after the base demand to avoid double-counting initial stock
+    const batchQty = r.currentBatches.reduce((s, b) => {
+      if (b.source === "order" && b.deliveredAt && baseSec > 0 && (b.deliveredAt.seconds ?? 0) < baseSec) return s;
+      return s + (b.qty || 0);
+    }, 0);
+    return { ...r, currentQty: batchQty + r.submittedQty, productName: productMap[r.productKey]?.name ?? r.productKey };
+  });
 
   const sortFn = {
     country: (a, b) => a.entity.localeCompare(b.entity) || a.productName.localeCompare(b.productName),
@@ -912,55 +946,68 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
   const CURRENT_MONTH = `${MONTHS_LIST[new Date().getMonth()]} ${new Date().getFullYear()}`;
   const productMap = Object.fromEntries(products.map(p => [p.key, p]));
 
-  // Current inventory per (entity, productKey) — inventory batches + demand submissions
+  // Latest demand per country (for current inventory display — not restricted to current month)
+  const latestDemandByCountryESS = {};
+  for (const d of demands) {
+    if (!d.country) continue;
+    const k = d.country;
+    const cur = latestDemandByCountryESS[k];
+    if (!cur || (d.submittedAt?.seconds ?? 0) > (cur.submittedAt?.seconds ?? 0)) {
+      latestDemandByCountryESS[k] = d;
+    }
+  }
+  const currentMonthDemands = demands.filter(d => d.month === CURRENT_MONTH);
+
+  // Build summaryMap: track order batches and non-order batches separately for time-filtering
   const summaryMap = {};
   for (const item of items) {
     if (item.levelType && item.levelType !== "current") continue;
     const key = `${item.entity}||${item.productKey}`;
-    if (!summaryMap[key]) summaryMap[key] = { entity: item.entity, productKey: item.productKey, currentQty: 0 };
-    summaryMap[key].currentQty += (item.qty || 0);
+    if (!summaryMap[key]) summaryMap[key] = { entity: item.entity, productKey: item.productKey, orderBatches: [], nonOrderBatches: [] };
+    if (item.source === "order" && item.deliveredAt) {
+      summaryMap[key].orderBatches.push(item);
+    } else {
+      summaryMap[key].nonOrderBatches.push(item);
+    }
   }
-  // Also add entries for countries that only submitted via demand (no inventory batches)
-  for (const demand of demands) {
-    const country = demand.country;
-    if (!country || !demand.currentInventory) continue;
+  // Also add placeholder entries for countries that only have demand submissions (no inventory batches)
+  for (const demand of Object.values(latestDemandByCountryESS)) {
+    if (!demand.country || !demand.currentInventory) continue;
     for (const [pk, qty] of Object.entries(demand.currentInventory)) {
       if (!qty) continue;
-      const key = `${country}||${pk}`;
-      if (!summaryMap[key]) summaryMap[key] = { entity: country, productKey: pk, currentQty: 0 };
+      const key = `${demand.country}||${pk}`;
+      if (!summaryMap[key]) summaryMap[key] = { entity: demand.country, productKey: pk, orderBatches: [], nonOrderBatches: [] };
     }
   }
 
   const rows = Object.values(summaryMap).map(r => {
-    // Match demand for this country in the current month
-    const demand = demands.find(d =>
-      (d.country || "").trim().toLowerCase() === r.entity.trim().toLowerCase()
-    );
-    // Check for resolved discrepancy that overrides raw demand value
-    const resolvedMsg = demand ? messages.find(m =>
-      !m.type &&
-      m.productKey === r.productKey &&
-      m.period === CURRENT_MONTH &&
-      m.toUserId === demand.userId &&
+    const cKey = r.entity;
+    const latestDemand = latestDemandByCountryESS[cKey];
+    const baseDemandTimeSec = latestDemand?.submittedAt?.seconds ?? 0;
+
+    const submittedCurrent = latestDemand?.currentInventory?.[r.productKey] ?? 0;
+    // Order batches received after the base demand submission (avoids double-counting initial stock)
+    const orderBatchQty = r.orderBatches.filter(b => baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec).reduce((s, b) => s + (b.qty || 0), 0);
+    const nonOrderBatchQty = r.nonOrderBatches.reduce((s, b) => s + (b.qty || 0), 0);
+    const currentQty = submittedCurrent + orderBatchQty + nonOrderBatchQty;
+
+    // For expected demand, use current month demand
+    const currentMonthDemand = currentMonthDemands.find(d => (d.country || "") === cKey);
+    const resolvedMsg = currentMonthDemand ? messages.find(m =>
+      !m.type && m.productKey === r.productKey && m.period === CURRENT_MONTH &&
+      m.toUserId === currentMonthDemand.userId &&
       (m.status === "resolved" || m.status === "admin_resolved")
     ) : null;
-    // Current inventory: inventory batches + submitted current from demand
-    const submittedCurrent = demand?.currentInventory?.[r.productKey] ?? 0;
-    const currentQty = submittedCurrent + r.currentQty; // r.currentQty = received order batches
     const expectedDemand = resolvedMsg
       ? (resolvedMsg.resolvedQty ?? 0)
-      : demand ? (Number(demand[r.productKey]) || 0) : 0;
-    const desiredManual = demand?.desiredInventory?.[r.productKey] ?? null;
+      : currentMonthDemand ? (Number(currentMonthDemand[r.productKey]) || 0) : 0;
+    const desiredManual = (currentMonthDemand ?? latestDemand)?.desiredInventory?.[r.productKey] ?? null;
 
     return {
-      entity: r.entity,
-      productKey: r.productKey,
+      entity: r.entity, productKey: r.productKey,
       productName: productMap[r.productKey]?.name ?? r.productKey,
-      currentQty,
-      expectedDemand,
-      safetyStock: currentQty - expectedDemand,
-      hasResolved: !!resolvedMsg,
-      desiredManual,
+      currentQty, expectedDemand, safetyStock: currentQty - expectedDemand,
+      hasResolved: !!resolvedMsg, desiredManual,
     };
   });
 
@@ -1032,6 +1079,187 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
   );
 }
 
+// ─── Stock Flow Tab (admin — global, country → product → months) ──────────────
+function StockFlowTab({ items, products, demands, waste, messages }) {
+  const [expandedCountry, setExpandedCountry] = useState(null);
+  const [expandedProduct, setExpandedProduct] = useState(null);
+
+  const MONTHS_LIST = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+  function parseMonth(monthStr) {
+    const [name, year] = monthStr.split(" ");
+    return new Date(Number(year), MONTHS_LIST.indexOf(name), 1);
+  }
+
+  function shortLabel(monthStr) {
+    const [name, year] = monthStr.split(" ");
+    return `${name.slice(0, 3)} '${year.slice(2)}`;
+  }
+
+  const orderBatches = items.filter(i => i.source === "order" && (!i.levelType || i.levelType === "current"));
+  const initialBatches = items.filter(i => i.source !== "order" && (!i.levelType || i.levelType === "current"));
+  const countries = [...new Set(demands.map(d => d.country).filter(Boolean))].sort();
+
+  if (countries.length === 0) return (
+    <div className="text-center py-10">
+      <TrendingDown className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+      <p className="text-gray-400 text-sm">No demand submissions with country data yet.</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-gray-400">Global stock ledger — country → product → month. Actual Demand = post-delivery − closing − waste. Variance shown against submitted demand.</p>
+      {countries.map(country => {
+        const countryDemands = demands.filter(d => d.country === country);
+        const sortedDemands = [...countryDemands].sort((a, b) => {
+          try { return parseMonth(a.month) - parseMonth(b.month); } catch { return 0; }
+        });
+        const countryBatches = orderBatches.filter(b => b.entity === country);
+        const countryWaste = waste.filter(w => w.userCountry === country);
+        const countryUserIds = [...new Set(countryDemands.map(d => d.userId).filter(Boolean))];
+        const countryMessages = messages.filter(m => countryUserIds.includes(m.toUserId));
+        const isExpC = expandedCountry === country;
+
+        return (
+          <div key={country} className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+            <button onClick={() => setExpandedCountry(isExpC ? null : country)}
+              className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-gray-50 transition-colors">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#2D6A2D]/10 flex items-center justify-center">
+                  <Layers className="w-4 h-4 text-[#2D6A2D]" />
+                </div>
+                <span className="font-semibold text-sm text-gray-800">{country}</span>
+                <span className="text-xs text-gray-400">{sortedDemands.length} period{sortedDemands.length !== 1 ? "s" : ""}</span>
+              </div>
+              {isExpC ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+            </button>
+
+            {isExpC && (
+              <div className="border-t border-gray-100 divide-y divide-gray-100">
+                {products.map(product => {
+                  const pKey = product.key;
+                  const shelfLife = product.shelfLifeMonths ?? null;
+                  const productOrderBatches = countryBatches.filter(b => b.productKey === pKey);
+                  const hasAnyOrders = productOrderBatches.length > 0;
+                  const initBatch = initialBatches.find(b => b.productKey === pKey && b.entity === country);
+                  let manualExpiry = null;
+                  if (shelfLife) {
+                    const seed = initBatch?.id || initBatch?.batchId || pKey;
+                    const base = initBatch?.deliveredAt?.toDate?.() ?? defaultMarchDelivery(seed);
+                    manualExpiry = new Date(base);
+                    manualExpiry.setMonth(manualExpiry.getMonth() + shelfLife);
+                  }
+                  const rows = [];
+                  let prevRow = null;
+                  for (let i = 0; i < sortedDemands.length; i++) {
+                    const demandM = sortedDemands[i];
+                    const demandNext = sortedDemands[i + 1] ?? null;
+                    const openingStock = demandM.currentInventory?.[pKey];
+                    if (openingStock == null) { prevRow = null; continue; }
+                    const ordersIn = productOrderBatches.filter(b => batchBelongsToPeriodIM(b, demandM.month, MONTHS_LIST)).reduce((s, b) => s + (b.qty || 0), 0);
+                    const wasteQty = countryWaste.filter(w => w.productKey === pKey && w.month === demandM.month).reduce((s, w) => s + (w.wastedQty || 0), 0);
+                    let manualDelta = 0;
+                    if (!prevRow && !hasAnyOrders) {
+                      manualDelta = openingStock;
+                    } else if (prevRow) {
+                      const fifoMax = prevRow.openingStock + prevRow.ordersIn - prevRow.wasteQty;
+                      if (openingStock > fifoMax + 0.001) manualDelta = openingStock - fifoMax;
+                    }
+                    const postDelivery = openingStock + ordersIn;
+                    const closingStock = demandNext?.currentInventory?.[pKey] ?? null;
+                    const consumption = closingStock !== null ? Math.max(0, postDelivery - closingStock - wasteQty) : null;
+                    const resolvedMsg = countryMessages.find(m => m.productKey === pKey && m.period === demandM.month && (m.status === "resolved" || m.status === "admin_resolved"));
+                    const submittedDemand = demandM[pKey] ?? null;
+                    const effectiveDemand = resolvedMsg?.resolvedQty ?? submittedDemand;
+                    const row = { month: demandM.month, openingStock, ordersIn, manualDelta, postDelivery, wasteQty, closingStock, consumption, submittedDemand, effectiveDemand, resolvedMsg };
+                    rows.push(row);
+                    prevRow = row;
+                  }
+                  if (rows.length === 0) return null;
+
+                  const prodKey = `${country}-${pKey}`;
+                  const isExpP = expandedProduct === prodKey;
+
+                  return (
+                    <div key={pKey} className="bg-gray-50/40">
+                      <button onClick={() => setExpandedProduct(isExpP ? null : prodKey)}
+                        className="w-full flex items-center justify-between px-5 py-2.5 hover:bg-gray-100/60 transition-colors">
+                        <div className="flex items-center gap-3">
+                          <Package className="w-3.5 h-3.5 text-[#2D6A2D]" />
+                          <span className="font-medium text-sm text-gray-700">{product.name}</span>
+                          <span className="text-xs text-gray-400">{rows.length} period{rows.length !== 1 ? "s" : ""}</span>
+                        </div>
+                        {isExpP ? <ChevronDown className="w-3.5 h-3.5 text-gray-400" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400" />}
+                      </button>
+
+                      {isExpP && (
+                        <div className="border-t border-gray-100 bg-white overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-gray-50 border-b border-gray-100">
+                                <th className="text-left px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Period</th>
+                                <th className="text-right px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Opening (t)</th>
+                                <th className="text-right px-3 py-2.5 font-semibold text-green-600 uppercase tracking-wider whitespace-nowrap">Orders In (t)</th>
+                                <th className="text-right px-3 py-2.5 font-semibold text-blue-600 uppercase tracking-wider whitespace-nowrap">Post-Delivery (t)</th>
+                                <th className="text-right px-3 py-2.5 font-semibold text-red-500 uppercase tracking-wider whitespace-nowrap">Waste (t)</th>
+                                <th className="text-right px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Closing (t)</th>
+                                <th className="text-right px-3 py-2.5 font-semibold text-[#2D6A2D] uppercase tracking-wider whitespace-nowrap">Actual (t)</th>
+                                <th className="text-right px-3 py-2.5 font-semibold text-amber-600 uppercase tracking-wider whitespace-nowrap">Submitted (t)</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50">
+                              {rows.map(row => {
+                                const variance = row.consumption !== null && row.effectiveDemand != null ? row.consumption - row.effectiveDemand : null;
+                                return (
+                                  <tr key={row.month} className="hover:bg-gray-50">
+                                    <td className="px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">{shortLabel(row.month)}</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums text-gray-600">
+                                      {row.openingStock.toFixed(2)}
+                                      {row.manualDelta > 0 && <div className="text-[9px] text-amber-600 mt-0.5 font-medium">+{row.manualDelta.toFixed(2)} adj{manualExpiry ? ` · exp ${manualExpiry.toLocaleDateString("en-US", { month: "short", year: "numeric" })}` : ""}</div>}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums text-green-700">{row.ordersIn > 0 ? `+${row.ordersIn.toFixed(2)}` : "—"}</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-blue-700">{row.postDelivery.toFixed(2)}</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums text-red-600">{row.wasteQty > 0 ? `−${row.wasteQty.toFixed(2)}` : "—"}</td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums text-gray-600">
+                                      {row.closingStock != null ? row.closingStock.toFixed(2) : <span className="text-gray-300 italic text-[10px]">pending</span>}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums">
+                                      {row.consumption !== null
+                                        ? <span className="font-bold text-[#2D6A2D]">{row.consumption.toFixed(2)}</span>
+                                        : <span className="text-gray-300 italic text-[10px]">pending</span>}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right tabular-nums">
+                                      {row.effectiveDemand != null ? (
+                                        <div>
+                                          <span className={row.resolvedMsg ? "font-semibold text-[#2D6A2D]" : "text-amber-700"}>{row.effectiveDemand.toFixed(2)}</span>
+                                          {variance !== null && (
+                                            <div className={`text-[10px] mt-0.5 ${Math.abs(variance) < 0.01 ? "text-green-500" : variance > 0 ? "text-red-500" : "text-blue-500"}`}>
+                                              {Math.abs(variance) < 0.01 ? "✓" : variance > 0 ? `+${variance.toFixed(2)}` : `${variance.toFixed(2)}`}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : <span className="text-gray-300">—</span>}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Inventory Management ─────────────────────────────────────────────────────
 export default function InventoryManagement() {
   const [items, setItems] = useState([]);
@@ -1039,6 +1267,7 @@ export default function InventoryManagement() {
   const [products, setProducts] = useState([]);
   const [demands, setDemands] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [waste, setWaste] = useState([]);
   const [activeTab, setActiveTab] = useState("stock");
 
   useEffect(() => {
@@ -1057,9 +1286,7 @@ export default function InventoryManagement() {
   }, []);
 
   useEffect(() => {
-    const MONTHS_LIST = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-    const currentMonth = `${MONTHS_LIST[new Date().getMonth()]} ${new Date().getFullYear()}`;
-    return onSnapshot(query(collection(db, "demands"), where("month", "==", currentMonth)), snap => {
+    return onSnapshot(collection(db, "demands"), snap => {
       setDemands(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
   }, []);
@@ -1070,9 +1297,16 @@ export default function InventoryManagement() {
     });
   }, []);
 
+  useEffect(() => {
+    return onSnapshot(collection(db, "waste"), snap => {
+      setWaste(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, []);
+
   const tabs = [
     { id: "stock", label: "Stock Levels" },
     { id: "safety", label: "Estimated Safety Stock" },
+    { id: "flow", label: "Stock Flow" },
   ];
 
   return (
@@ -1094,6 +1328,9 @@ export default function InventoryManagement() {
       )}
       {activeTab === "safety" && (
         <EstimatedSafetyStockTab items={items} products={products} demands={demands} messages={messages} />
+      )}
+      {activeTab === "flow" && (
+        <StockFlowTab items={items} products={products} demands={demands} waste={waste} messages={messages} />
       )}
     </>
   );

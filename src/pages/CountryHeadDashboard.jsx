@@ -9,7 +9,7 @@ import Layout from "../components/Layout";
 import {
   Package, Send, History, CheckCircle2, AlertCircle,
   Loader2, TrendingUp, Edit3, Save, X, BarChart2, Table, MessageSquare, Info,
-  Layers, ChevronDown, ChevronRight, Truck, ShoppingCart, AlertTriangle
+  Layers, ChevronDown, ChevronRight, Truck, ShoppingCart, AlertTriangle, Trash2, TrendingDown, RotateCcw
 } from "lucide-react";
 
 const MONTHS = [
@@ -96,6 +96,29 @@ function BarChart({ groups, barColors, barLabels, height = 140 }) {
       </div>
     </div>
   );
+}
+
+function fmtDateStr(ts) {
+  if (!ts) return "—";
+  const d = ts.toDate?.() ?? (ts instanceof Date ? ts : null);
+  if (!d) return "—";
+  return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+// Deterministic "random" March 2026 date for initial inventory without a receipt timestamp
+function defaultMarchDelivery(batchId) {
+  let h = 0;
+  for (const c of (batchId || "x")) h = ((h << 5) - h) + c.charCodeAt(0);
+  return new Date(2026, 2, (Math.abs(h) % 28) + 1);
+}
+
+// Match an inventory batch to a period month string, falling back to deliveredAt when period field is absent
+function batchBelongsToPeriod(batch, monthStr) {
+  if (batch.period) return batch.period === monthStr;
+  const d = batch.deliveredAt?.toDate?.() ?? (batch.deliveredAt instanceof Date ? batch.deliveredAt : null);
+  if (!d) return false;
+  const [mName, mYear] = monthStr.split(" ");
+  return d.getFullYear() === Number(mYear) && MONTHS.indexOf(mName) === d.getMonth();
 }
 
 // ─── Change Country Modal ─────────────────────────────────────────────────────
@@ -288,6 +311,382 @@ function ProductInfoViewModal({ product, onClose }) {
   );
 }
 
+// ─── Waste Record Modal ───────────────────────────────────────────────────────
+function WasteRecordModal({ userProfile, products, inventory, currentUser, wasteRecords, onClose }) {
+  const country = userProfile?.country || "";
+  const currentBatches = inventory.filter(i => !i.levelType || i.levelType === "current");
+
+  const [selectedProduct, setSelectedProduct] = useState(products[0]?.key || "");
+  const [selectedBatchId, setSelectedBatchId] = useState("");
+  const [wastedQty, setWastedQty] = useState("");
+  const [month, setMonth] = useState(CURRENT_MONTH);
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [undoing, setUndoing] = useState(null);
+
+  const productBatches = currentBatches.filter(b => b.productKey === selectedProduct);
+  const selectedBatch = productBatches.find(b => b.id === selectedBatchId);
+
+  const sortedHistory = [...(wasteRecords || [])].sort(
+    (a, b) => (b.submittedAt?.seconds ?? 0) - (a.submittedAt?.seconds ?? 0)
+  );
+
+  useEffect(() => {
+    const first = productBatches[0];
+    setSelectedBatchId(first ? first.id : "");
+    setWastedQty(first ? String(first.qty ?? "") : "");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProduct]);
+
+  const monthOptions = [];
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(); d.setMonth(d.getMonth() - i);
+    monthOptions.push(`${MONTHS[d.getMonth()]} ${d.getFullYear()}`);
+  }
+
+  const handleSubmit = async () => {
+    const qty = parseFloat(wastedQty);
+    if (!selectedBatchId || !qty || qty <= 0 || saving) return;
+    setSaving(true);
+    try {
+      const product = products.find(p => p.key === selectedProduct);
+      await addDoc(collection(db, "waste"), {
+        userId: currentUser.uid,
+        username: userProfile?.username || "",
+        userCountry: country,
+        productKey: selectedProduct,
+        productName: product?.name || selectedProduct,
+        inventoryDocId: selectedBatchId,
+        batchId: selectedBatch?.batchId || selectedBatchId.slice(-6),
+        originalBatchQty: selectedBatch?.qty ?? 0,
+        wastedQty: qty,
+        month,
+        note: note.trim(),
+        submittedAt: serverTimestamp(),
+      });
+      setSaved(true);
+      setTimeout(() => { setSaved(false); onClose(); }, 1200);
+    } catch (e) { console.error(e); }
+    finally { setSaving(false); }
+  };
+
+  const handleUndo = async (wasteId) => {
+    setUndoing(wasteId);
+    try {
+      await deleteDoc(doc(db, "waste", wasteId));
+    } catch (e) { console.error(e); }
+    finally { setUndoing(null); }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <h3 className="font-bold text-gray-900">Record Waste / Spoilage</h3>
+            <p className="text-xs text-gray-400 mt-0.5">Report stock discarded due to expiry or damage</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+        </div>
+
+        {sortedHistory.length > 0 && (
+          <div className="mb-5">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Waste History — undo to restore</p>
+            <div className="space-y-1.5 max-h-52 overflow-y-auto">
+              {sortedHistory.map(w => (
+                <div key={w.id} className="flex items-start gap-2 py-2.5 px-3 rounded-xl bg-red-50 border border-red-100">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-semibold text-gray-800">{w.productName}</span>
+                      <span className="text-[10px] text-gray-400">·</span>
+                      <span className="text-[10px] text-gray-500">Batch {w.batchId}</span>
+                      <span className="text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full font-semibold ml-auto whitespace-nowrap">
+                        −{(w.wastedQty ?? 0).toFixed(2)} t
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                      <span className="text-[10px] text-gray-400">{w.month}</span>
+                      {w.note && <span className="text-[10px] text-gray-400 italic truncate">· {w.note}</span>}
+                      <span className="text-[10px] text-gray-300 ml-auto whitespace-nowrap">
+                        {w.submittedAt?.toDate?.().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) ?? ""}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleUndo(w.id)}
+                    disabled={!!undoing}
+                    title="Undo — restore this quantity to inventory"
+                    className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-white text-[11px] font-medium text-gray-600 hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 transition-colors">
+                    {undoing === w.id
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : <RotateCcw className="w-3 h-3" />}
+                    Undo
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 mb-0 border-t border-gray-100" />
+          </div>
+        )}
+
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">New Entry</p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Product</label>
+            <select value={selectedProduct} onChange={e => setSelectedProduct(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]">
+              {products.map(p => <option key={p.key} value={p.key}>{p.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Batch</label>
+            {productBatches.length === 0 ? (
+              <p className="text-xs text-gray-400 italic py-1.5">No batches found for this product.</p>
+            ) : (
+              <select value={selectedBatchId}
+                onChange={e => {
+                  setSelectedBatchId(e.target.value);
+                  const b = productBatches.find(b => b.id === e.target.value);
+                  if (b) setWastedQty(String(b.qty ?? ""));
+                }}
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]">
+                {productBatches.map(b => (
+                  <option key={b.id} value={b.id}>
+                    {b.batchId || b.id.slice(-6)} — {(b.qty ?? 0).toFixed(2)} t{b.period ? ` (${b.period})` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Quantity Wasted (t)</label>
+            <input type="number" min="0.001" step="0.01" max={selectedBatch?.qty ?? undefined}
+              value={wastedQty} onChange={e => setWastedQty(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]" />
+            {selectedBatch && (
+              <p className="text-xs text-gray-400 mt-1">Full batch: {(selectedBatch.qty ?? 0).toFixed(2)} t</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Period Waste Occurred</label>
+            <select value={month} onChange={e => setMonth(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]">
+              {monthOptions.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+              Note <span className="font-normal text-gray-400 normal-case">(optional)</span>
+            </label>
+            <textarea value={note} onChange={e => setNote(e.target.value)} rows={2}
+              placeholder="Reason, e.g. expired, damaged..."
+              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] resize-none" />
+          </div>
+        </div>
+        <div className="flex gap-3 mt-5">
+          <button onClick={onClose}
+            className="flex-1 px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50">
+            Cancel
+          </button>
+          <button onClick={handleSubmit}
+            disabled={saving || saved || !selectedBatchId || !wastedQty || parseFloat(wastedQty) <= 0}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-semibold disabled:opacity-60 transition-colors">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" />
+              : saved ? <CheckCircle2 className="w-4 h-4" />
+              : <Trash2 className="w-4 h-4" />}
+            {saved ? "Recorded!" : "Record Waste"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Stock Flow Sub-Tab (demand planner — single country) ─────────────────────
+function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products }) {
+  const [expandedProduct, setExpandedProduct] = useState(null);
+
+  const orderBatches = inventory.filter(i => i.source === "order" && (!i.levelType || i.levelType === "current"));
+  const initialBatches = inventory.filter(i => i.source !== "order" && (!i.levelType || i.levelType === "current"));
+  const sortedDemands = [...demands].sort((a, b) => parseMonthToDate(a.month) - parseMonthToDate(b.month));
+
+  const ledger = products.map(product => {
+    const pKey = product.key;
+    const shelfLife = product.shelfLifeMonths ?? null;
+    const productOrderBatches = orderBatches.filter(b => b.productKey === pKey);
+    const hasAnyOrders = productOrderBatches.length > 0;
+
+    // Compute a stable expiry for initial/manual stock — treated as earliest in FIFO
+    const initBatch = initialBatches.find(b => b.productKey === pKey);
+    let manualExpiry = null;
+    if (shelfLife) {
+      const seed = initBatch?.id || initBatch?.batchId || pKey;
+      const base = initBatch?.deliveredAt?.toDate?.() ?? defaultMarchDelivery(seed);
+      manualExpiry = new Date(base);
+      manualExpiry.setMonth(manualExpiry.getMonth() + shelfLife);
+    }
+
+    const rows = [];
+    let prevRow = null;
+    for (let i = 0; i < sortedDemands.length; i++) {
+      const demandM = sortedDemands[i];
+      const demandNext = sortedDemands[i + 1] ?? null;
+      const openingStock = demandM.currentInventory?.[pKey] ?? null;
+      if (openingStock === null) { prevRow = null; continue; }
+
+      const ordersIn = productOrderBatches.filter(b => batchBelongsToPeriod(b, demandM.month)).reduce((s, b) => s + (b.qty || 0), 0);
+      const wasteQty = wasteRecords.filter(w => w.productKey === pKey && w.month === demandM.month).reduce((s, w) => s + (w.wastedQty || 0), 0);
+
+      // Stock unexplained by previous period's FIFO = manual/initial adjustment, shown separately with earliest expiry
+      let manualDelta = 0;
+      if (!prevRow && !hasAnyOrders) {
+        manualDelta = openingStock; // Case 1: first period, no order batches received yet
+      } else if (prevRow) {
+        const fifoMax = prevRow.openingStock + prevRow.ordersIn - prevRow.wasteQty;
+        if (openingStock > fifoMax + 0.001) manualDelta = openingStock - fifoMax; // Case 2: surplus beyond FIFO
+      }
+
+      const postDelivery = openingStock + ordersIn;
+      const closingStock = demandNext?.currentInventory?.[pKey] ?? null;
+      const consumption = closingStock !== null ? Math.max(0, postDelivery - closingStock - wasteQty) : null;
+      const resolvedMsg = messages.find(m => m.productKey === pKey && m.period === demandM.month && (m.status === "resolved" || m.status === "admin_resolved"));
+      const submittedDemand = demandM[pKey] ?? null;
+      const effectiveDemand = resolvedMsg?.resolvedQty ?? submittedDemand;
+      // Sort by expiry ascending so earliest-expiring batches are displayed first (FIFO)
+      const periodBatches = productOrderBatches
+        .filter(b => batchBelongsToPeriod(b, demandM.month))
+        .sort((a, b) => (a.expiryDate?.seconds ?? a.deliveredAt?.seconds ?? Infinity) - (b.expiryDate?.seconds ?? b.deliveredAt?.seconds ?? Infinity));
+      const periodWaste = wasteRecords.filter(w => w.productKey === pKey && w.month === demandM.month);
+      const row = { month: demandM.month, openingStock, ordersIn, manualDelta, postDelivery, wasteQty, closingStock, consumption, submittedDemand, effectiveDemand, resolvedMsg, periodBatches, periodWaste };
+      rows.push(row);
+      prevRow = row;
+    }
+    return { product, rows, manualExpiry };
+  }).filter(g => g.rows.length > 0);
+
+  if (ledger.length === 0) return (
+    <div className="text-center py-10">
+      <TrendingDown className="w-8 h-8 text-gray-200 mx-auto mb-2" />
+      <p className="text-gray-400 text-sm">No inventory flow data yet. Submit current inventory data to see the ledger.</p>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-gray-400">Monthly stock ledger per product (FIFO). Consumption = post-delivery − closing − waste. Variance between actual and submitted demand shown for completed periods.</p>
+      {ledger.map(({ product, rows, manualExpiry }) => {
+        const isExp = expandedProduct === product.key;
+        return (
+          <div key={product.key} className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+            <button onClick={() => setExpandedProduct(isExp ? null : product.key)}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#2D6A2D]/10 flex items-center justify-center">
+                  <Package className="w-4 h-4 text-[#2D6A2D]" />
+                </div>
+                <span className="font-semibold text-sm text-gray-800">{product.name}</span>
+                <span className="text-xs text-gray-400">{rows.length} period{rows.length !== 1 ? "s" : ""}</span>
+              </div>
+              {isExp ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+            </button>
+            {isExp && (
+              <div className="border-t border-gray-100">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-100">
+                        <th className="text-left px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Period</th>
+                        <th className="text-right px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Opening (t)</th>
+                        <th className="text-right px-3 py-2.5 font-semibold text-green-600 uppercase tracking-wider whitespace-nowrap">Orders In (t)</th>
+                        <th className="text-right px-3 py-2.5 font-semibold text-blue-600 uppercase tracking-wider whitespace-nowrap">Post-Delivery (t)</th>
+                        <th className="text-right px-3 py-2.5 font-semibold text-red-500 uppercase tracking-wider whitespace-nowrap">Waste (t)</th>
+                        <th className="text-right px-3 py-2.5 font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Closing (t)</th>
+                        <th className="text-right px-3 py-2.5 font-semibold text-[#2D6A2D] uppercase tracking-wider whitespace-nowrap">Actual Demand (t)</th>
+                        <th className="text-right px-3 py-2.5 font-semibold text-amber-600 uppercase tracking-wider whitespace-nowrap">Submitted (t)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {rows.map(row => {
+                        const variance = row.consumption !== null && row.effectiveDemand != null ? row.consumption - row.effectiveDemand : null;
+                        return (
+                          <tr key={row.month} className="hover:bg-gray-50">
+                            <td className="px-3 py-2.5 font-medium text-gray-700 whitespace-nowrap">{shortMonthLabel(row.month)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-gray-600">{row.openingStock?.toFixed(2) ?? "—"}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-green-700">{row.ordersIn > 0 ? `+${row.ordersIn.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-blue-700">{row.postDelivery.toFixed(2)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-red-600">{row.wasteQty > 0 ? `−${row.wasteQty.toFixed(2)}` : "—"}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-gray-600">{row.closingStock?.toFixed(2) ?? <span className="text-gray-300 italic text-[10px]">pending</span>}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums">
+                              {row.consumption !== null
+                                ? <span className="font-bold text-[#2D6A2D]">{row.consumption.toFixed(2)}</span>
+                                : <span className="text-gray-300 italic text-[10px]">pending</span>}
+                            </td>
+                            <td className="px-3 py-2.5 text-right tabular-nums">
+                              {row.effectiveDemand != null ? (
+                                <div>
+                                  <span className={row.resolvedMsg ? "font-semibold text-[#2D6A2D]" : "text-amber-700"}>{row.effectiveDemand.toFixed(2)}</span>
+                                  {variance !== null && (
+                                    <div className={`text-[10px] mt-0.5 ${Math.abs(variance) < 0.01 ? "text-green-500" : variance > 0 ? "text-red-500" : "text-blue-500"}`}>
+                                      {Math.abs(variance) < 0.01 ? "✓" : variance > 0 ? `+${variance.toFixed(2)}` : `${variance.toFixed(2)}`}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : <span className="text-gray-300">—</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {rows.some(r => r.manualDelta > 0 || r.periodBatches.length > 0 || r.periodWaste.length > 0) && (
+                  <div className="border-t border-gray-100 p-4 bg-gray-50/60 space-y-3">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Batch Movements (FIFO — earliest expiry first)</p>
+                    {rows.map(row => (
+                      (row.manualDelta > 0 || row.periodBatches.length > 0 || row.periodWaste.length > 0) && (
+                        <div key={row.month}>
+                          <p className="text-xs font-medium text-gray-600 mb-1.5">{row.month}</p>
+                          <div className="space-y-1">
+                            {row.manualDelta > 0 && (
+                              <div className="flex items-center gap-3 text-xs bg-amber-50 rounded-lg px-3 py-2 border border-amber-100">
+                                <span className="text-amber-700 font-bold shrink-0">⬆ INIT</span>
+                                <span className="text-gray-700 font-medium">Initial / Manual Stock</span>
+                                <span className="text-gray-500">{row.manualDelta.toFixed(2)} t</span>
+                                {manualExpiry && <span className="text-amber-600 ml-auto text-[10px]">exp {manualExpiry.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} · consumed first</span>}
+                              </div>
+                            )}
+                            {row.periodBatches.map(b => (
+                              <div key={b.id} className="flex items-center gap-3 text-xs bg-white rounded-lg px-3 py-2 border border-green-100">
+                                <span className="text-green-600 font-bold shrink-0">↑ IN</span>
+                                <span className="text-gray-700 font-medium">{b.batchId || b.id.slice(-6)}</span>
+                                <span className="text-gray-500">{(b.qty ?? 0).toFixed(2)} t</span>
+                                {b.expiryDate && <span className="text-amber-600 ml-auto">exp {fmtDateStr(b.expiryDate)}</span>}
+                              </div>
+                            ))}
+                            {row.periodWaste.map(w => (
+                              <div key={w.id} className="flex items-center gap-3 text-xs bg-red-50 rounded-lg px-3 py-2 border border-red-100">
+                                <span className="text-red-600 font-bold shrink-0">↓ WASTE</span>
+                                <span className="text-gray-700 font-medium">{w.batchId}</span>
+                                <span className="text-red-700">−{(w.wastedQty ?? 0).toFixed(2)} t</span>
+                                {w.note && <span className="text-gray-400 italic ml-auto">{w.note}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Inventory Tab ─────────────────────────────────────────────────────────────
 function CountryInventoryTab({ userProfile, products }) {
   const { currentUser } = useAuth();
@@ -299,6 +698,8 @@ function CountryInventoryTab({ userProfile, products }) {
   const [subTab, setSubTab] = useState("stock");
   const [expandedProduct, setExpandedProduct] = useState(null);
   const [marking, setMarking] = useState(null);
+  const [waste, setWaste] = useState([]);
+  const [showWasteModal, setShowWasteModal] = useState(false);
 
   const country = userProfile?.country || "";
   const MONTH = currentMonthStr();
@@ -326,6 +727,13 @@ function CountryInventoryTab({ userProfile, products }) {
   }, [currentUser]);
 
   useEffect(() => {
+    if (!country) return;
+    return onSnapshot(query(collection(db, "waste"), where("userCountry", "==", country)), snap => {
+      setWaste(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [country]);
+
+  useEffect(() => {
     return onSnapshot(query(collection(db, "mrpImports"), where("isActive", "==", true)), snap => {
       setActiveMrp(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
     });
@@ -347,9 +755,14 @@ function CountryInventoryTab({ userProfile, products }) {
 
   const getComputedExpiry = (batch, shelfLifeMonths) => {
     if (batch.expiryDate) return batch.expiryDate.toDate?.() ?? null;
-    if (batch.deliveredAt && shelfLifeMonths) {
-      const base = batch.deliveredAt.toDate?.() ?? null;
-      if (base) { const exp = new Date(base); exp.setMonth(exp.getMonth() + shelfLifeMonths); return exp; }
+    const base = batch.deliveredAt?.toDate?.() ?? null;
+    if (base && shelfLifeMonths) {
+      const exp = new Date(base); exp.setMonth(exp.getMonth() + shelfLifeMonths); return exp;
+    }
+    // Initial inventory with no receipt timestamp: use deterministic March 2026 delivery date
+    if (!batch.deliveredAt && batch.source !== "order" && shelfLifeMonths) {
+      const march = defaultMarchDelivery(batch.id || batch.batchId || "x");
+      const exp = new Date(march); exp.setMonth(exp.getMonth() + shelfLifeMonths); return exp;
     }
     return null;
   };
@@ -365,7 +778,11 @@ function CountryInventoryTab({ userProfile, products }) {
     finally { setMarking(null); }
   };
 
-  const currentDemand = demands.find(d => d.month === MONTH);
+  const currentDemand = demands.find(d => d.month === MONTH) ?? null;
+  const latestDemand = [...demands].sort((a, b) => (b.submittedAt?.seconds ?? 0) - (a.submittedAt?.seconds ?? 0))[0] ?? null;
+  // baseDemand: prefer current month; fall back to most recent for inventory display
+  const baseDemand = currentDemand ?? latestDemand;
+  const baseDemandTimeSec = baseDemand?.submittedAt?.seconds ?? 0;
 
   const getExpectedDemand = (productKey) => {
     const resolvedMsg = messages.find(m =>
@@ -385,8 +802,10 @@ function CountryInventoryTab({ userProfile, products }) {
 
   const productGroups = products.map(p => {
     const batches = currentBatchItems.filter(i => i.productKey === p.key);
-    const receivedOrderQty = batches.filter(b => b.source === "order" && b.deliveredAt).reduce((s, b) => s + (b.qty || 0), 0);
-    const submittedCurrentQty = currentDemand?.currentInventory?.[p.key] ?? null;
+    // Only count order batches received after the base demand submission to avoid double-counting
+    const receivedOrderQty = batches.filter(b => b.source === "order" && b.deliveredAt && (baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec)).reduce((s, b) => s + (b.qty || 0), 0);
+    // Use latest demand (not just current month) so initial inventory isn't lost when no current-month submission exists
+    const submittedCurrentQty = baseDemand?.currentInventory?.[p.key] ?? null;
     const totalCurrentQty = (submittedCurrentQty ?? 0) + receivedOrderQty;
 
     const expiries = batches.map(b => getComputedExpiry(b, p.shelfLifeMonths)).filter(Boolean);
@@ -415,13 +834,22 @@ function CountryInventoryTab({ userProfile, products }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
-        {[{ id: "stock", label: "Stock Levels" }, { id: "safety", label: "Safety Stock" }].map(t => (
-          <button key={t.id} onClick={() => setSubTab(t.id)}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${subTab === t.id ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-            {t.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+          {[{ id: "stock", label: "Stock Levels" }, { id: "safety", label: "Safety Stock" }, { id: "flow", label: "Stock Flow" }].map(t => (
+            <button key={t.id} onClick={() => setSubTab(t.id)}
+              className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${subTab === t.id ? "bg-white text-[#2D6A2D] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setShowWasteModal(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+        >
+          <TrendingDown className="w-3.5 h-3.5" />
+          Record Waste
+        </button>
       </div>
 
       {subTab === "stock" && (
@@ -569,6 +997,27 @@ function CountryInventoryTab({ userProfile, products }) {
             </table>
           </div>
         </div>
+      )}
+
+      {subTab === "flow" && (
+        <StockFlowSubTab
+          demands={demands}
+          inventory={inventory}
+          wasteRecords={waste}
+          messages={messages}
+          products={products}
+        />
+      )}
+
+      {showWasteModal && (
+        <WasteRecordModal
+          userProfile={userProfile}
+          products={products}
+          inventory={inventory}
+          currentUser={currentUser}
+          wasteRecords={waste}
+          onClose={() => setShowWasteModal(false)}
+        />
       )}
     </div>
   );
@@ -836,7 +1285,7 @@ function CountryOrdersTab({ userProfile, products }) {
           qty: item.orderedQty, levelType: "current",
           deliveredAt: serverTimestamp(),
           deliveredBy: userProfile?.username || currentUser?.uid || "Unknown",
-          orderId: order.id, source: "order",
+          orderId: order.id, source: "order", period: order.month,
           updatedAt: serverTimestamp(),
         });
         batchIds.push(ref.id);
@@ -1264,6 +1713,9 @@ export default function CountryHeadDashboard() {
   const [infoProduct, setInfoProduct] = useState(null);
   const [showChangeCountry, setShowChangeCountry] = useState(false);
 
+  const [orderBatchesForHistory, setOrderBatchesForHistory] = useState([]);
+  const [wasteForHistory, setWasteForHistory] = useState([]);
+
   // Load products from Firestore
   useEffect(() => {
     const q = query(collection(db, "products"), orderBy("order"));
@@ -1292,6 +1744,23 @@ export default function CountryHeadDashboard() {
       setHistoryLoading(false);
     }, (err) => { console.error("History query error:", err); setHistoryLoading(false); });
   }, [currentUser]);
+
+  // Load order batches and waste for actual demand calculation in history table
+  useEffect(() => {
+    const country = userProfile?.country;
+    if (!country) return;
+    return onSnapshot(query(collection(db, "inventory"), where("entity", "==", country), where("source", "==", "order")), snap => {
+      setOrderBatchesForHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [userProfile?.country]);
+
+  useEffect(() => {
+    const country = userProfile?.country;
+    if (!country) return;
+    return onSnapshot(query(collection(db, "waste"), where("userCountry", "==", country)), snap => {
+      setWasteForHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [userProfile?.country]);
 
   // Reset form when selected month changes
   useEffect(() => {
@@ -1403,6 +1872,24 @@ export default function CountryHeadDashboard() {
     setDesiredInventory({});
     setComment("");
     setSubmitError("");
+  };
+
+  const sortedHistoryAsc = [...history].sort((a, b) => {
+    try { return parseMonthToDate(a.month) - parseMonthToDate(b.month); } catch { return 0; }
+  });
+
+  const calcActualDemand = (monthStr, productKey) => {
+    const idx = sortedHistoryAsc.findIndex(d => d.month === monthStr);
+    if (idx < 0) return null;
+    const demandM = sortedHistoryAsc[idx];
+    const demandNext = sortedHistoryAsc[idx + 1] ?? null;
+    const openingStock = demandM.currentInventory?.[productKey];
+    if (openingStock == null) return null;
+    const closingStock = demandNext?.currentInventory?.[productKey];
+    if (closingStock == null) return null;
+    const ordersIn = orderBatchesForHistory.filter(b => b.productKey === productKey && batchBelongsToPeriod(b, monthStr)).reduce((s, b) => s + (b.qty || 0), 0);
+    const wasteQty = wasteForHistory.filter(w => w.productKey === productKey && w.month === monthStr).reduce((s, w) => s + (w.wastedQty || 0), 0);
+    return Math.max(0, openingStock + ordersIn - closingStock - wasteQty);
   };
 
   const monthOptions = generateMonthOptions(history.map(d => d.month));
@@ -1772,8 +2259,9 @@ export default function CountryHeadDashboard() {
                           {products.map(p => (
                             <th key={p.key} className="text-right pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{p.name} (t)</th>
                           ))}
-                          <th className="text-right pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Total (t)</th>
-                          <th className="text-left pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Submitted</th>
+                          <th className="text-right pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Submitted (t)</th>
+                          <th className="text-right pb-3 text-xs font-semibold text-[#2D6A2D] uppercase tracking-wider whitespace-nowrap">Actual (t)</th>
+                          <th className="text-left pb-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-50">
@@ -1782,6 +2270,9 @@ export default function CountryHeadDashboard() {
                           const submittedAt = d.submittedAt?.toDate?.();
                           const isSelected = d.month === selectedMonth;
                           const isCurrentM = d.month === currentMonthStr();
+                          const actuals = products.map(p => calcActualDemand(d.month, p.key));
+                          const actualTotal = actuals.every(v => v !== null) ? actuals.reduce((s, v) => s + v, 0) : null;
+                          const variance = actualTotal !== null ? actualTotal - total : null;
                           return (
                             <tr key={d.id} className={`hover:bg-gray-50 transition-colors ${isSelected ? "bg-green-50/50" : ""}`}>
                               <td className="py-3 pr-4">
@@ -1799,6 +2290,18 @@ export default function CountryHeadDashboard() {
                                 <td key={p.key} className="py-3 text-right tabular-nums text-gray-700">{Number(d[p.key] || 0).toFixed(2)}</td>
                               ))}
                               <td className="py-3 text-right tabular-nums font-semibold text-[#2D6A2D]">{total.toFixed(2)}</td>
+                              <td className="py-3 text-right tabular-nums">
+                                {actualTotal !== null ? (
+                                  <div>
+                                    <span className="font-bold text-[#2D6A2D]">{actualTotal.toFixed(2)}</span>
+                                    {variance !== null && (
+                                      <div className={`text-[10px] mt-0.5 ${Math.abs(variance) < 0.01 ? "text-green-500" : variance > 0 ? "text-red-500" : "text-blue-500"}`}>
+                                        {Math.abs(variance) < 0.01 ? "✓" : variance > 0 ? `+${variance.toFixed(2)}` : `${variance.toFixed(2)}`}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : <span className="text-gray-300 text-xs italic">pending</span>}
+                              </td>
                               <td className="py-3 text-xs text-gray-400">
                                 {submittedAt
                                   ? submittedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
