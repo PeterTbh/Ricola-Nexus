@@ -1293,14 +1293,16 @@ function CountryOrdersTab({ userProfile, products }) {
   }, [currentUser]);
 
   const getCalculatedQty = (productKey) => {
+    const product = products.find(p => p.key === productKey || (p.keyHistory || []).includes(productKey));
+    const allPKeys = product ? [product.key, ...(product.keyHistory || [])] : [productKey];
     const thisMonth = demands.find(d => d.month === CURRENT_MONTH_STR);
-    const baseCurrent = thisMonth?.currentInventory?.[productKey] ?? 0;
-    const receivedOrderQty = inventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && i.productKey === productKey).reduce((s, b) => s + (b.qty || 0), 0);
+    const baseCurrent = allPKeys.reduce((val, k) => val ?? thisMonth?.currentInventory?.[k] ?? null, null) ?? 0;
+    const receivedOrderQty = inventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey)).reduce((s, b) => s + (b.qty || 0), 0);
     const currentQty = baseCurrent + receivedOrderQty;
-    const desiredQty = thisMonth?.desiredInventory?.[productKey] ?? 0;
-    let expectedDemand = thisMonth ? (Number(thisMonth[productKey]) || 0) : 0;
+    const desiredQty = allPKeys.reduce((val, k) => val ?? thisMonth?.desiredInventory?.[k] ?? null, null) ?? 0;
+    let expectedDemand = allPKeys.reduce((val, k) => val ?? (thisMonth?.[k] != null ? Number(thisMonth[k]) : null), null) ?? 0;
     if (!expectedDemand && activeMrp?.rows) {
-      const mrpRow = activeMrp.rows.find(r => r.productKey === productKey && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
+      const mrpRow = activeMrp.rows.find(r => allPKeys.includes(r.productKey) && r.country?.trim().toLowerCase() === country.trim().toLowerCase());
       if (mrpRow) expectedDemand = typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty) || 0;
     }
     return Math.max(0, desiredQty + expectedDemand - currentQty);
@@ -1312,8 +1314,9 @@ function CountryOrdersTab({ userProfile, products }) {
     try {
       const batchIds = [];
       for (const item of order.items) {
+        const currentProduct = products.find(p => p.key === item.productKey || (p.keyHistory || []).includes(item.productKey));
         const ref = await addDoc(collection(db, "inventory"), {
-          productKey: item.productKey, entity: country,
+          productKey: currentProduct?.key ?? item.productKey, entity: country,
           batchId: `ORDER-${order.id.slice(-6)}`,
           qty: item.orderedQty, levelType: "current",
           deliveredAt: serverTimestamp(),
@@ -1421,7 +1424,7 @@ function CountryOrdersTab({ userProfile, products }) {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {(order.items || []).map(item => {
-                    const prod = products.find(p => p.key === item.productKey);
+                    const prod = products.find(p => p.key === item.productKey || (p.keyHistory || []).includes(item.productKey));
                     const calcQty = getCalculatedQty(item.productKey);
                     const deviation = item.orderedQty - calcQty;
                     return (
@@ -1588,32 +1591,33 @@ function CalculatedOrderTab({ userProfile, products }) {
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {products.map(p => {
+            const allPKeys = [p.key, ...(p.keyHistory || [])];
             const thisMonthDemand = demands.find(d => d.month === CURRENT_MONTH_STR);
 
-            // Current and desired come from the demand submission
-            const baseCurrent = thisMonthDemand?.currentInventory?.[p.key] ?? 0;
+            // Current and desired come from the demand submission; check all historical keys
+            const baseCurrent = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.currentInventory?.[k] ?? null, null) ?? 0;
             // Add inventory batches from received orders (source: "order") for real-time update
-            const receivedOrderQty = currentItems.filter(i => i.source === "order" && i.deliveredAt && i.productKey === p.key).reduce((s, b) => s + (b.qty || 0), 0);
+            const receivedOrderQty = currentItems.filter(i => i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey)).reduce((s, b) => s + (b.qty || 0), 0);
             const currentQty = baseCurrent + receivedOrderQty;
-            const desiredQty = thisMonthDemand?.desiredInventory?.[p.key] ?? 0;
+            const desiredQty = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.desiredInventory?.[k] ?? null, null) ?? 0;
 
             // Expected demand: check for resolved discrepancy first
             const resolvedMsg = messages.find(m =>
-              !m.type && m.productKey === p.key && m.period === CURRENT_MONTH_STR &&
+              !m.type && allPKeys.includes(m.productKey) && m.period === CURRENT_MONTH_STR &&
               (m.status === "resolved" || m.status === "admin_resolved")
             );
             const hasUnresolved = messages.some(m =>
-              !m.type && m.productKey === p.key && m.period === CURRENT_MONTH_STR &&
+              !m.type && allPKeys.includes(m.productKey) && m.period === CURRENT_MONTH_STR &&
               m.status === "pending"
             );
             let expectedDemand = 0;
             if (resolvedMsg) {
               expectedDemand = resolvedMsg.resolvedQty ?? 0;
             } else if (!hasUnresolved) {
-              expectedDemand = thisMonthDemand ? (Number(thisMonthDemand[p.key]) || 0) : 0;
+              expectedDemand = thisMonthDemand ? (allPKeys.reduce((val, k) => val ?? (thisMonthDemand[k] != null ? Number(thisMonthDemand[k]) : null), null) ?? 0) : 0;
               if (!expectedDemand && activeMrp?.rows) {
                 const mrpRow = activeMrp.rows.find(r =>
-                  r.productKey === p.key &&
+                  allPKeys.includes(r.productKey) &&
                   r.country?.trim().toLowerCase() === country.trim().toLowerCase()
                 );
                 if (mrpRow) expectedDemand = typeof mrpRow.suggestedQty === "number" ? mrpRow.suggestedQty : parseFloat(mrpRow.suggestedQty) || 0;
@@ -1679,7 +1683,7 @@ function CalculatedOrderTab({ userProfile, products }) {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {pendingDeliveries.map(batch => {
-                  const prod = products.find(p => p.key === batch.productKey);
+                  const prod = products.find(p => p.key === batch.productKey || (p.keyHistory || []).includes(batch.productKey));
                   return (
                     <tr key={batch.id} className="hover:bg-amber-50/30 transition-colors">
                       <td className="px-4 py-3 font-medium text-gray-800">
@@ -1912,22 +1916,24 @@ export default function CountryHeadDashboard() {
   });
 
   const calcActualDemand = (monthStr, productKey) => {
+    const product = products.find(p => p.key === productKey || (p.keyHistory || []).includes(productKey));
+    const allPKeys = product ? [product.key, ...(product.keyHistory || [])] : [productKey];
     const idx = sortedHistoryAsc.findIndex(d => d.month === monthStr);
     if (idx < 0) return null;
     const demandM = sortedHistoryAsc[idx];
     const demandNext = sortedHistoryAsc[idx + 1] ?? null;
-    const openingStock = demandM.currentInventory?.[productKey];
+    const openingStock = allPKeys.reduce((val, k) => val ?? demandM.currentInventory?.[k] ?? null, null);
     if (openingStock == null) return null;
-    const closingStock = demandNext?.currentInventory?.[productKey];
+    const closingStock = demandNext ? allPKeys.reduce((val, k) => val ?? demandNext.currentInventory?.[k] ?? null, null) : null;
     if (closingStock == null) return null;
-    const ordersIn = orderBatchesForHistory.filter(b => b.productKey === productKey && batchBelongsToPeriod(b, monthStr)).reduce((s, b) => {
+    const ordersIn = orderBatchesForHistory.filter(b => allPKeys.includes(b.productKey) && batchBelongsToPeriod(b, monthStr)).reduce((s, b) => {
       const batchWasted = wasteForHistory.filter(w => w.inventoryDocId === b.id).reduce((sw, w) => sw + (w.wastedQty || 0), 0);
       return s + (b.qty || 0) + batchWasted;
     }, 0);
     const demDateH = parseMonthToDate(monthStr);
     const nextDateH = demandNext ? parseMonthToDate(demandNext.month) : null;
     const wasteQty = wasteForHistory.filter(w => {
-      if (w.productKey !== productKey) return false;
+      if (!allPKeys.includes(w.productKey)) return false;
       const wDate = parseMonthToDate(w.month);
       return wDate >= demDateH && (nextDateH === null || wDate < nextDateH);
     }).reduce((s, w) => s + (w.wastedQty || 0), 0);
@@ -2054,13 +2060,16 @@ export default function CountryHeadDashboard() {
                     </div>
                     <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Expected Demand</p>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
-                      {products.map((p) => (
+                      {products.map((p) => {
+                        const allPKeys = [p.key, ...(p.keyHistory || [])];
+                        const submittedVal = allPKeys.reduce((val, k) => val ?? (existingDoc[k] != null ? Number(existingDoc[k]) : null), null) ?? 0;
+                        return (
                         <div key={p.key} className="bg-gray-50 rounded-xl p-4 text-center border border-gray-100">
                           <div className="flex items-center justify-center gap-1 mb-1">
                             <p className="text-xs text-gray-500 font-medium">{p.name}</p>
                             <button type="button" onClick={() => setInfoProduct(p)} title="Product information" className="text-gray-300 hover:text-[#2D6A2D] transition-colors"><Info className="w-3 h-3" /></button>
                           </div>
-                          <p className="text-2xl font-bold text-[#2D6A2D]">{Number(existingDoc[p.key] || 0).toFixed(2)}</p>
+                          <p className="text-2xl font-bold text-[#2D6A2D]">{submittedVal.toFixed(2)}</p>
                           <p className="text-xs text-gray-400 mt-0.5">tons</p>
                           {existingDoc[`adminNote_${p.key}`] && (
                             <p className="text-xs text-amber-600 mt-1 leading-tight">{existingDoc[`adminNote_${p.key}`]}</p>

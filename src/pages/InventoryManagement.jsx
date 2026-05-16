@@ -1156,10 +1156,11 @@ function StockFlowTab({ items, products, demands, waste, messages }) {
               <div className="border-t border-gray-100 divide-y divide-gray-100">
                 {products.map(product => {
                   const pKey = product.key;
+                  const allPKeys = [pKey, ...(product.keyHistory || [])];
                   const shelfLife = product.shelfLifeMonths ?? null;
-                  const productOrderBatches = countryBatches.filter(b => b.productKey === pKey);
+                  const productOrderBatches = countryBatches.filter(b => allPKeys.includes(b.productKey));
                   const hasAnyOrders = productOrderBatches.length > 0;
-                  const initBatch = initialBatches.find(b => b.productKey === pKey && b.entity === country);
+                  const initBatch = initialBatches.find(b => allPKeys.includes(b.productKey) && b.entity === country);
                   let manualExpiry = null;
                   if (shelfLife) {
                     const seed = initBatch?.id || initBatch?.batchId || pKey;
@@ -1172,13 +1173,13 @@ function StockFlowTab({ items, products, demands, waste, messages }) {
                   for (let i = 0; i < sortedDemands.length; i++) {
                     const demandM = sortedDemands[i];
                     const demandNext = sortedDemands[i + 1] ?? null;
-                    const openingStock = demandM.currentInventory?.[pKey];
+                    const openingStock = allPKeys.reduce((val, k) => val ?? demandM.currentInventory?.[k] ?? null, null);
                     if (openingStock == null) { prevRow = null; continue; }
                     const ordersIn = productOrderBatches.filter(b => batchBelongsToPeriodIM(b, demandM.month, MONTHS_LIST)).reduce((s, b) => s + origQtySF(b), 0);
                     const demDateSF = parseMonth(demandM.month);
                     const nextDateSF = demandNext ? parseMonth(demandNext.month) : null;
                     const wasteQty = countryWaste.filter(w => {
-                      if (w.productKey !== pKey) return false;
+                      if (!allPKeys.includes(w.productKey)) return false;
                       const wDate = parseMonth(w.month);
                       return wDate >= demDateSF && (nextDateSF === null || wDate < nextDateSF);
                     }).reduce((s, w) => s + (w.wastedQty || 0), 0);
@@ -1190,10 +1191,10 @@ function StockFlowTab({ items, products, demands, waste, messages }) {
                       if (openingStock > fifoMax + 0.001) manualDelta = openingStock - fifoMax;
                     }
                     const postDelivery = openingStock + ordersIn;
-                    const closingStock = demandNext?.currentInventory?.[pKey] ?? null;
+                    const closingStock = demandNext ? allPKeys.reduce((val, k) => val ?? demandNext.currentInventory?.[k] ?? null, null) : null;
                     const consumption = closingStock !== null ? Math.max(0, postDelivery - closingStock - wasteQty) : null;
-                    const resolvedMsg = countryMessages.find(m => m.productKey === pKey && m.period === demandM.month && (m.status === "resolved" || m.status === "admin_resolved"));
-                    const submittedDemand = demandM[pKey] ?? null;
+                    const resolvedMsg = countryMessages.find(m => allPKeys.includes(m.productKey) && m.period === demandM.month && (m.status === "resolved" || m.status === "admin_resolved"));
+                    const submittedDemand = allPKeys.reduce((val, k) => val ?? (demandM[k] !== undefined ? demandM[k] : null), null);
                     const effectiveDemand = resolvedMsg?.resolvedQty ?? submittedDemand;
                     const row = { month: demandM.month, openingStock, ordersIn, manualDelta, postDelivery, wasteQty, closingStock, consumption, submittedDemand, effectiveDemand, resolvedMsg };
                     rows.push(row);
