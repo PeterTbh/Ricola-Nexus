@@ -4284,84 +4284,137 @@ function MaterialManagement() {
   const netIsomalt = ssIsomalt - currentIsomalt + totalIsomaltDemand;
   const netSugar = ssSugar - currentSugar + totalSugarDemand;
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    const { default: ExcelJS } = await import("exceljs");
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Material Demand");
+
+    ws.columns = [
+      { width: 40 }, { width: 18 }, { width: 22 }, { width: 22 }, { width: 30 },
+    ];
+
+    const MIN_PROD_ROWS = 10;
     const fmtD = (raw) => {
       const d = raw?.toDate?.() || (raw instanceof Date ? raw : null);
       return d ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
     };
-    const aoa = [];
-    const merges = [];
-    const push = (row) => aoa.push(row);
-    const lastMerge = (c1, c2) => merges.push({ s: { r: aoa.length - 1, c: c1 }, e: { r: aoa.length - 1, c: c2 } });
 
-    const MIN_PROD_ROWS = 10;
-    const E = "";  // empty cell shorthand
+    let ri = 1;
+    const boldFont   = { bold: true };
+    const titleFont  = { bold: true, size: 13 };
+    const secFont    = { bold: true, size: 11 };
+    const netFont    = { bold: true };
+    const greyItalic = { italic: true, color: { argb: "FF888888" } };
+    const med        = { style: "medium" };
 
-    // ── Title ──
-    push(["RICOLA NEXUS — Raw Material Demand Report", E, E, E, E]);
-    lastMerge(0, 4);
-    push([`Period: ${selectedMonth}`, E, E, `Generated: ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`, E]);
-    push([E, E, E, E, E]);
+    // pushRow(values, { colIndex: { font, alignment }, ... })
+    const pushRow = (values, cellFmts = {}) => {
+      const row = ws.addRow(values);
+      Object.entries(cellFmts).forEach(([ci, fmt]) => {
+        const cell = row.getCell(Number(ci));
+        if (fmt.font) cell.font = fmt.font;
+        if (fmt.alignment) cell.alignment = fmt.alignment;
+      });
+      ri++;
+    };
+
+    const pushMerged = (value, font, span = 5) => {
+      const row = ws.addRow([value, "", "", "", ""].slice(0, span));
+      if (font) row.getCell(1).font = font;
+      ws.mergeCells(ri, 1, ri, span);
+      ri++;
+    };
+
+    const applyBox = (startRow, endRow) => {
+      for (let r = startRow; r <= endRow; r++) {
+        for (let c = 1; c <= 5; c++) {
+          const cell = ws.getCell(r, c);
+          const b = {};
+          if (r === startRow) b.top    = med;
+          if (r === endRow)   b.bottom = med;
+          if (c === 1)        b.left   = med;
+          if (c === 5)        b.right  = med;
+          if (Object.keys(b).length) cell.border = b;
+        }
+      }
+    };
+
+    // ── Header ──
+    pushMerged("RICOLA NEXUS — Raw Material Demand Report", titleFont);
+    pushRow([`Period: ${selectedMonth}`, "", "", `Generated: ${new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`, ""]);
+    pushRow(["", "", "", "", ""]);
 
     // ── Order Summary ──
-    push([`ORDER SUMMARY  —  Materials to Procure for ${selectedMonth}`, E, E, E, E]);
-    lastMerge(0, 4);
-    push(["Material", "Net Order Qty (t)", "Total Demand (t)", "– Inventory (t)", "+ Safety Stock (t)"]);
-    push(["Isomalt", +netIsomalt.toFixed(2), +totalIsomaltDemand.toFixed(2), +currentIsomalt.toFixed(2), +ssIsomalt.toFixed(2)]);
-    push(["Sugar",   +netSugar.toFixed(2),   +totalSugarDemand.toFixed(2),   +currentSugar.toFixed(2),   +ssSugar.toFixed(2)]);
-    push(["Formula: Net Order Qty = Total Material Demand + Safety Stock − Current Inventory", E, E, E, E]);
-    lastMerge(0, 4);
-    push([E, E, E, E, E]);
+    const sumStart = ri;
+    pushMerged(`ORDER SUMMARY  —  Materials to Procure for ${selectedMonth}`, secFont);
+    pushRow(["Material", "Net Order Qty (t)", "Total Demand (t)", "– Inventory (t)", "+ Safety Stock (t)"],
+      { 1: { font: boldFont }, 2: { font: boldFont }, 3: { font: boldFont }, 4: { font: boldFont }, 5: { font: boldFont } });
+    pushRow(["Isomalt", +netIsomalt.toFixed(2), +totalIsomaltDemand.toFixed(2), +currentIsomalt.toFixed(2), +ssIsomalt.toFixed(2)],
+      { 2: { font: netFont } });
+    pushRow(["Sugar",   +netSugar.toFixed(2),   +totalSugarDemand.toFixed(2),   +currentSugar.toFixed(2),   +ssSugar.toFixed(2)],
+      { 2: { font: netFont } });
+    pushMerged("Formula: Net Order Qty = Total Material Demand + Safety Stock − Current Inventory", greyItalic);
+    applyBox(sumStart, ri - 1);
 
-    // ── Isomalt section ──
-    push(["ISOMALT  —  Demand Calculation", E, E, E, E]);
-    lastMerge(0, 4);
-    push(["Product", "Product Demand (t)", "Isomalt Content (t/t)", "Isomalt Demand (t)", E]);
+    pushRow(["", "", "", "", ""]);
+
+    // ── Isomalt ──
+    const isoStart = ri;
+    pushMerged("ISOMALT  —  Demand Calculation", secFont);
+    pushRow(["Product", "Product Demand (t)", "Isomalt Content (t/t)", "Isomalt Demand (t)", ""],
+      { 1: { font: boldFont }, 2: { font: boldFont }, 3: { font: boldFont }, 4: { font: boldFont } });
     const isoProd = productRows.filter(pr => pr.isomaltPerTon > 0 || pr.isomaltDemand > 0);
-    isoProd.forEach(pr => push([pr.name, +pr.demandTons.toFixed(2), +pr.isomaltPerTon.toFixed(4), +pr.isomaltDemand.toFixed(2), E]));
-    for (let i = isoProd.length; i < MIN_PROD_ROWS; i++) push([E, E, E, E, E]);
-    push(["Total Isomalt Demand (t)", E, E, +totalIsomaltDemand.toFixed(2), E]);
-    push(["Current Isomalt Inventory (t)", E, E, +currentIsomalt.toFixed(2), E]);
-    push(["Safety Stock Target (t)", E, E, +ssIsomalt.toFixed(2), E]);
-    push(["→  NET ISOMALT ORDER QTY (t)", E, E, +netIsomalt.toFixed(2), E]);
-    push([E, E, E, E, E]);
+    isoProd.forEach(pr => pushRow([pr.name, +pr.demandTons.toFixed(2), +pr.isomaltPerTon.toFixed(4), +pr.isomaltDemand.toFixed(2), ""]));
+    for (let i = isoProd.length; i < MIN_PROD_ROWS; i++) pushRow(["", "", "", "", ""]);
+    pushRow(["Total Isomalt Demand (t)", "", "", +totalIsomaltDemand.toFixed(2), ""]);
+    pushRow(["Current Isomalt Inventory (t)", "", "", +currentIsomalt.toFixed(2), ""]);
+    pushRow(["Safety Stock Target (t)", "", "", +ssIsomalt.toFixed(2), ""]);
+    pushRow(["→  NET ISOMALT ORDER QTY (t)", "", "", +netIsomalt.toFixed(2), ""],
+      { 1: { font: netFont }, 4: { font: netFont } });
+    applyBox(isoStart, ri - 1);
 
-    // ── Sugar section ──
-    push(["SUGAR  —  Demand Calculation", E, E, E, E]);
-    lastMerge(0, 4);
-    push(["Product", "Product Demand (t)", "Sugar Content (t/t)", "Sugar Demand (t)", E]);
+    pushRow(["", "", "", "", ""]);
+
+    // ── Sugar ──
+    const sugStart = ri;
+    pushMerged("SUGAR  —  Demand Calculation", secFont);
+    pushRow(["Product", "Product Demand (t)", "Sugar Content (t/t)", "Sugar Demand (t)", ""],
+      { 1: { font: boldFont }, 2: { font: boldFont }, 3: { font: boldFont }, 4: { font: boldFont } });
     const sugProd = productRows.filter(pr => pr.sugarPerTon > 0 || pr.sugarDemand > 0);
-    sugProd.forEach(pr => push([pr.name, +pr.demandTons.toFixed(2), +pr.sugarPerTon.toFixed(4), +pr.sugarDemand.toFixed(2), E]));
-    for (let i = sugProd.length; i < MIN_PROD_ROWS; i++) push([E, E, E, E, E]);
-    push(["Total Sugar Demand (t)", E, E, +totalSugarDemand.toFixed(2), E]);
-    push(["Current Sugar Inventory (t)", E, E, +currentSugar.toFixed(2), E]);
-    push(["Safety Stock Target (t)", E, E, +ssSugar.toFixed(2), E]);
-    push(["→  NET SUGAR ORDER QTY (t)", E, E, +netSugar.toFixed(2), E]);
-    push([E, E, E, E, E]);
+    sugProd.forEach(pr => pushRow([pr.name, +pr.demandTons.toFixed(2), +pr.sugarPerTon.toFixed(4), +pr.sugarDemand.toFixed(2), ""]));
+    for (let i = sugProd.length; i < MIN_PROD_ROWS; i++) pushRow(["", "", "", "", ""]);
+    pushRow(["Total Sugar Demand (t)", "", "", +totalSugarDemand.toFixed(2), ""]);
+    pushRow(["Current Sugar Inventory (t)", "", "", +currentSugar.toFixed(2), ""]);
+    pushRow(["Safety Stock Target (t)", "", "", +ssSugar.toFixed(2), ""]);
+    pushRow(["→  NET SUGAR ORDER QTY (t)", "", "", +netSugar.toFixed(2), ""],
+      { 1: { font: netFont }, 4: { font: netFont } });
+    applyBox(sugStart, ri - 1);
 
-    // ── Inventory batches ──
-    push(["CURRENT INVENTORY BATCHES", E, E, E, E]);
-    lastMerge(0, 4);
-    push(["Material", "Batch Number", "Quantity (t)", "Delivered", "Notes"]);
-    batches.forEach(b => push([
+    pushRow(["", "", "", "", ""]);
+
+    // ── Batches ──
+    pushMerged("CURRENT INVENTORY BATCHES", secFont);
+    pushRow(["Material", "Batch Number", "Quantity (t)", "Delivered", "Notes"],
+      { 1: { font: boldFont }, 2: { font: boldFont }, 3: { font: boldFont }, 4: { font: boldFont }, 5: { font: boldFont } });
+    batches.forEach(b => pushRow([
       b.material.charAt(0).toUpperCase() + b.material.slice(1),
       b.batchNumber,
       +(b.quantityTons || 0).toFixed(2),
       fmtD(b.deliveredAt),
-      b.notes || E,
+      b.notes || "",
     ]));
-    for (let i = 0; i < 5; i++) push([E, E, E, E, E]);
+    for (let i = 0; i < 5; i++) pushRow(["", "", "", "", ""]);
+    pushMerged("Inputs highlighted in grey (inventory, safety stock) — update before finalising order", greyItalic);
 
-    // ── Footer ──
-    push(["Inputs highlighted in grey (inventory, safety stock) — update before finalising order", E, E, E, E]);
-    lastMerge(0, 4);
-
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 40 }, { wch: 18 }, { wch: 22 }, { wch: 20 }, { wch: 30 }];
-    ws["!merges"] = merges;
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Material Demand");
-    XLSX.writeFile(wb, `material_demand_${selectedMonth.replace(" ", "_")}.xlsx`);
+    // ── Download ──
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `material_demand_${selectedMonth.replace(" ", "_")}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const isomaltBatches = batches.filter(b => b.material === "isomalt");
@@ -4463,7 +4516,7 @@ function MaterialManagement() {
               {savingSettings ? <Loader2 className="w-4 h-4 animate-spin" /> : settingsSaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
               {settingsSaved ? "Saved!" : "Save Targets"}
             </button>
-            <button onClick={handleExport} className="ml-auto flex items-center gap-2 px-3 py-2 rounded-xl border border-[#2D6A2D] text-[#2D6A2D] hover:bg-[#2D6A2D] hover:text-white text-sm font-semibold transition-colors">
+            <button onClick={() => handleExport().catch(console.error)} className="ml-auto flex items-center gap-2 px-3 py-2 rounded-xl border border-[#2D6A2D] text-[#2D6A2D] hover:bg-[#2D6A2D] hover:text-white text-sm font-semibold transition-colors">
               <Download className="w-4 h-4" /> Export Excel
             </button>
           </div>
