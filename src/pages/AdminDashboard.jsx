@@ -467,7 +467,7 @@ function ProductInfoModal({ product, products, onClose }) {
                 />
               </div>
               <div>
-                <span className="block text-xs text-gray-400 mb-1">Sugar / t</span>
+                <span className="block text-xs text-gray-400 mb-1">Glucose / t</span>
                 <input
                   type="number" step="0.0001" min="0"
                   value={sugarPerTon}
@@ -479,7 +479,7 @@ function ProductInfoModal({ product, products, onClose }) {
             </div>
             {(!isomaltPerTon || parseFloat(isomaltPerTon) === 0) && (!sugarPerTon || parseFloat(sugarPerTon) === 0) && (
               <p className="text-xs text-amber-600 bg-amber-50 px-2.5 py-1.5 rounded-lg mt-1.5">
-                No ingredient ratio set — enter isomalt or sugar per ton for material tracking.
+                No ingredient ratio set — enter isomalt or glucose per ton for material tracking.
               </p>
             )}
           </div>
@@ -1084,9 +1084,9 @@ function ProductManagement() {
       if (snap.empty && !seedingRef.current) {
         seedingRef.current = true;
         const defaults = [
-          { name: "Product 1", productId: "", notes: "", key: "product1Tons", order: 0, type: "HF" },
-          { name: "Product 2", productId: "", notes: "", key: "product2Tons", order: 1, type: "HF" },
-          { name: "Product 3", productId: "", notes: "", key: "product3Tons", order: 2, type: "HF" },
+          { name: "Product 1", notes: "", key: "product1Tons", order: 0, type: "HF" },
+          { name: "Product 2", notes: "", key: "product2Tons", order: 1, type: "HF" },
+          { name: "Product 3", notes: "", key: "product3Tons", order: 2, type: "HF" },
         ];
         for (const p of defaults) {
           await addDoc(collection(db, "products"), { ...p, createdAt: serverTimestamp() });
@@ -2020,7 +2020,7 @@ function ActiveAccounts() {
 // ─── Excel download helpers ────────────────────────────────────────────────────
 function downloadIndividualExcel(filtered, selectedMonth, products) {
   // Transposed layout: rows = products, columns = country heads
-  const header = ["Product Name", "Product ID", ...filtered.map(d => d.username)];
+  const header = ["Product Name", ...filtered.map(d => d.username)];
   const pickQty = (d, p) => {
     const allPKeys = [p.key, ...(p.keyHistory || [])];
     for (const k of allPKeys) if (d[k] != null) return Number(d[k]) || 0;
@@ -2029,19 +2029,16 @@ function downloadIndividualExcel(filtered, selectedMonth, products) {
 
   const productRows = products.map(p => [
     p.name,
-    p.productId || "",
     ...filtered.map(d => pickQty(d, p)),
   ]);
 
   const totalsRow = [
     "Total (tons)",
-    "",
     ...filtered.map(d => products.reduce((s, p) => s + pickQty(d, p), 0)),
   ];
 
   const submittedAtRow = [
     "Submitted At",
-    "",
     ...filtered.map(d => {
       const t = d.submittedAt?.toDate?.();
       return t ? t.toLocaleString("en-US") : "";
@@ -2050,7 +2047,6 @@ function downloadIndividualExcel(filtered, selectedMonth, products) {
 
   const commentsRow = [
     "Comments",
-    "",
     ...filtered.map(d => d.comment || ""),
   ];
 
@@ -2058,13 +2054,13 @@ function downloadIndividualExcel(filtered, selectedMonth, products) {
     header,
     ...productRows,
     totalsRow,
-    ["", "", ...filtered.map(() => "")],
+    ["", ...filtered.map(() => "")],
     submittedAtRow,
     commentsRow,
   ];
 
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 22 }, { wch: 18 }, ...filtered.map(() => ({ wch: 20 }))];
+  ws["!cols"] = [{ wch: 22 }, ...filtered.map(() => ({ wch: 20 }))];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, selectedMonth);
   XLSX.writeFile(wb, `Ricola_Nexus_Individual_${selectedMonth.replace(" ", "_")}.xlsx`);
@@ -2077,13 +2073,13 @@ function downloadAggregatedExcel(aggregated, filtered, selectedMonth, products) 
     ["Month", selectedMonth, ""],
     ["Submissions", filtered.length, ""],
     ["", "", ""],
-    ["Product", "Product ID", "Total Expected Demand (tons)"],
-    ...products.map(p => [p.name, p.productId || "", aggregated[p.key] || 0]),
-    ["Grand Total", "", total],
+    ["Product", "Total Expected Demand (tons)"],
+    ...products.map(p => [p.name, aggregated[p.key] || 0]),
+    ["Grand Total", total],
   ];
 
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 30 }];
+  ws["!cols"] = [{ wch: 22 }, { wch: 30 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, `${selectedMonth} Aggregated`);
   XLSX.writeFile(wb, `Ricola_Nexus_Aggregated_${selectedMonth.replace(" ", "_")}.xlsx`);
@@ -2129,9 +2125,9 @@ function DemandOverview() {
         setProducts(all);
       } else {
         setProducts([
-          { key: "product1Tons", name: "Product 1", productId: "", notes: "", order: 0 },
-          { key: "product2Tons", name: "Product 2", productId: "", notes: "", order: 1 },
-          { key: "product3Tons", name: "Product 3", productId: "", notes: "", order: 2 },
+          { key: "product1Tons", name: "Product 1", notes: "", order: 0 },
+          { key: "product2Tons", name: "Product 2", notes: "", order: 1 },
+          { key: "product3Tons", name: "Product 3", notes: "", order: 2 },
         ]);
       }
       setProductsLoaded(true);
@@ -3966,7 +3962,7 @@ function OrdersSection() {
 // ─── Material Format Info Modal ───────────────────────────────────────────────
 function MaterialFormatInfoModal({ onClose }) {
   const columns = [
-    { col: "Column A", name: "Material", required: true,  desc: 'Must be "isomalt" or "sugar" (case-insensitive). Rows without a recognised value default to isomalt.' },
+    { col: "Column A", name: "Material", required: true,  desc: 'Must be "isomalt" or "glucose" (case-insensitive). Also accepts legacy "sugar". Rows without a recognised value default to isomalt.' },
     { col: "Column B", name: "Batch Number", required: true,  desc: 'Supplier or internal batch reference. Also accepted: "Batch", "Batch No", "BatchNumber", "Batch_Number".' },
     { col: "Column C", name: "Quantity", required: true,  desc: 'Quantity in metric tons. Also accepted: "Qty", "Tons", "Quantity (tons)". Rows with blank or zero quantity are skipped.' },
     { col: "Column D", name: "Date", required: false, desc: 'Delivery date. Also accepted: "Delivered", "Delivery Date", "DeliveredAt", "Delivery". Accepts text dates or Excel serial numbers. Defaults to today if omitted.' },
@@ -4020,7 +4016,7 @@ function MaterialFormatInfoModal({ onClose }) {
               <tbody>
                 {[
                   ["Isomalt", "ISO-2026-001", "12.50", "2026-05-10", "Supplier A"],
-                  ["Sugar",   "SUG-2026-007", "8.00",  "2026-04-22", ""],
+                  ["Glucose", "GLC-2026-007", "8.00",  "2026-04-22", ""],
                   ["Isomalt", "ISO-2026-002", "5.25",  "",           "Urgent restock"],
                 ].map((row, i) => (
                   <tr key={i} className="border-b border-gray-50 last:border-0">
@@ -4058,7 +4054,7 @@ function BatchTable({ material, batchList, onDelete, deletingId }) {
     <div className="mb-6">
       <div className="flex items-center gap-2 mb-2">
         <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold ${material === "isomalt" ? "bg-blue-50 text-blue-700" : "bg-amber-50 text-amber-700"}`}>
-          {material.charAt(0).toUpperCase() + material.slice(1)}
+          {material === "sugar" ? "Glucose" : material.charAt(0).toUpperCase() + material.slice(1)}
         </span>
         <span className="text-sm text-gray-500">
           {batchList.length} batch{batchList.length !== 1 ? "es" : ""} ·{" "}
@@ -4223,7 +4219,7 @@ function MaterialManagement() {
           const batchNum = batchIdx >= 0 ? String(row[batchIdx]).trim() : "";
           const qty = qtyIdx >= 0 ? parseFloat(row[qtyIdx]) : NaN;
           if (!batchNum || isNaN(qty) || qty <= 0) continue;
-          const material = mat.includes("sugar") ? "sugar" : "isomalt";
+          const material = (mat.includes("sugar") || mat.includes("glucose")) ? "sugar" : "isomalt";
           let deliveredAt = new Date();
           if (dateIdx >= 0) {
             const rawDate = row[dateIdx];
@@ -4351,7 +4347,7 @@ function MaterialManagement() {
       { 1: { font: boldFont }, 2: { font: boldFont }, 3: { font: boldFont }, 4: { font: boldFont }, 5: { font: boldFont } });
     pushRow(["Isomalt", +netIsomalt.toFixed(2), +totalIsomaltDemand.toFixed(2), +currentIsomalt.toFixed(2), +ssIsomalt.toFixed(2)],
       { 2: { font: netFont } });
-    pushRow(["Sugar",   +netSugar.toFixed(2),   +totalSugarDemand.toFixed(2),   +currentSugar.toFixed(2),   +ssSugar.toFixed(2)],
+    pushRow(["Glucose", +netSugar.toFixed(2),   +totalSugarDemand.toFixed(2),   +currentSugar.toFixed(2),   +ssSugar.toFixed(2)],
       { 2: { font: netFont } });
     pushMerged("Formula: Net Order Qty = Total Material Demand + Safety Stock − Current Inventory", greyItalic);
     applyBox(sumStart, ri - 1);
@@ -4375,18 +4371,18 @@ function MaterialManagement() {
 
     pushRow(["", "", "", "", ""]);
 
-    // ── Sugar ──
+    // ── Glucose ──
     const sugStart = ri;
-    pushMerged("SUGAR  —  Demand Calculation", secFont);
-    pushRow(["Product", "Product Demand (t)", "Sugar Content (t/t)", "Sugar Demand (t)", ""],
+    pushMerged("GLUCOSE  —  Demand Calculation", secFont);
+    pushRow(["Product", "Product Demand (t)", "Glucose Content (t/t)", "Glucose Demand (t)", ""],
       { 1: { font: boldFont }, 2: { font: boldFont }, 3: { font: boldFont }, 4: { font: boldFont } });
     const sugProd = productRows.filter(pr => pr.sugarPerTon > 0 || pr.sugarDemand > 0);
     sugProd.forEach(pr => pushRow([pr.name, +pr.demandTons.toFixed(2), +pr.sugarPerTon.toFixed(4), +pr.sugarDemand.toFixed(2), ""]));
     for (let i = sugProd.length; i < MIN_PROD_ROWS; i++) pushRow(["", "", "", "", ""]);
-    pushRow(["Total Sugar Demand (t)", "", "", +totalSugarDemand.toFixed(2), ""]);
-    pushRow(["Current Sugar Inventory (t)", "", "", +currentSugar.toFixed(2), ""]);
+    pushRow(["Total Glucose Demand (t)", "", "", +totalSugarDemand.toFixed(2), ""]);
+    pushRow(["Current Glucose Inventory (t)", "", "", +currentSugar.toFixed(2), ""]);
     pushRow(["Safety Stock Target (t)", "", "", +ssSugar.toFixed(2), ""]);
-    pushRow(["→  NET SUGAR ORDER QTY (t)", "", "", +netSugar.toFixed(2), ""],
+    pushRow(["→  NET GLUCOSE ORDER QTY (t)", "", "", +netSugar.toFixed(2), ""],
       { 1: { font: netFont }, 4: { font: netFont } });
     applyBox(sugStart, ri - 1);
 
@@ -4397,7 +4393,7 @@ function MaterialManagement() {
     pushRow(["Material", "Batch Number", "Quantity (t)", "Delivered", "Notes"],
       { 1: { font: boldFont }, 2: { font: boldFont }, 3: { font: boldFont }, 4: { font: boldFont }, 5: { font: boldFont } });
     batches.forEach(b => pushRow([
-      b.material.charAt(0).toUpperCase() + b.material.slice(1),
+      b.material === "sugar" ? "Glucose" : b.material.charAt(0).toUpperCase() + b.material.slice(1),
       b.batchNumber,
       +(b.quantityTons || 0).toFixed(2),
       fmtD(b.deliveredAt),
@@ -4458,7 +4454,7 @@ function MaterialManagement() {
                   <label className="block text-xs text-gray-500 mb-1">Material</label>
                   <select value={addMaterial} onChange={e => setAddMaterial(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#4A9E4A]">
                     <option value="isomalt">Isomalt</option>
-                    <option value="sugar">Sugar</option>
+                    <option value="sugar">Glucose</option>
                   </select>
                 </div>
                 <div>
@@ -4509,7 +4505,7 @@ function MaterialManagement() {
               <input type="number" step="0.01" min="0" value={isomaltSS} onChange={e => setIsomaltSS(e.target.value)} placeholder="0.00" className="w-36 px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Sugar Safety Stock (t)</label>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Glucose Safety Stock (t)</label>
               <input type="number" step="0.01" min="0" value={sugarSS} onChange={e => setSugarSS(e.target.value)} placeholder="0.00" className="w-36 px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
             </div>
             <button onClick={handleSaveSettings} disabled={savingSettings} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-50 transition-colors">
@@ -4534,8 +4530,8 @@ function MaterialManagement() {
                   <th className="text-right py-2.5 text-xs font-semibold text-gray-500">Demand (t)</th>
                   <th className="text-right py-2.5 text-xs font-semibold text-blue-500">Isomalt / t</th>
                   <th className="text-right py-2.5 text-xs font-semibold text-blue-600">Isomalt Demand (t)</th>
-                  <th className="text-right py-2.5 text-xs font-semibold text-amber-500">Sugar / t</th>
-                  <th className="text-right py-2.5 text-xs font-semibold text-amber-600">Sugar Demand (t)</th>
+                  <th className="text-right py-2.5 text-xs font-semibold text-amber-500">Glucose / t</th>
+                  <th className="text-right py-2.5 text-xs font-semibold text-amber-600">Glucose Demand (t)</th>
                 </tr>
               </thead>
               <tbody>
@@ -4568,7 +4564,7 @@ function MaterialManagement() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
             {[
               { label: "Isomalt", totalDemand: totalIsomaltDemand, current: currentIsomalt, ss: ssIsomalt, net: netIsomalt, color: "blue" },
-              { label: "Sugar", totalDemand: totalSugarDemand, current: currentSugar, ss: ssSugar, net: netSugar, color: "amber" },
+              { label: "Glucose", totalDemand: totalSugarDemand, current: currentSugar, ss: ssSugar, net: netSugar, color: "amber" },
             ].map(({ label, totalDemand, current, ss, net, color }) => (
               <div key={label} className={`rounded-xl border p-4 space-y-2 ${color === "blue" ? "border-blue-100 bg-blue-50/40" : "border-amber-100 bg-amber-50/40"}`}>
                 <h4 className={`text-xs font-bold uppercase tracking-wider ${color === "blue" ? "text-blue-600" : "text-amber-600"}`}>{label}</h4>

@@ -307,7 +307,7 @@ function UploadMRPModal({ onClose, onImported }) {
             name: newProductKeys[i],
             type: "HF",
             order: maxOrder + 1 + i,
-            productId: "",
+
             notes: "",
             createdAt: serverTimestamp(),
           });
@@ -772,7 +772,7 @@ function ActivationValidationModal({ imp, imports, onClose, onActivated }) {
             name: newKeys[i],
             type: "HF",
             order: maxOrder + 1 + i,
-            productId: "",
+
             notes: "",
             createdAt: serverTimestamp(),
           });

@@ -268,16 +268,6 @@ function ProductInfoViewModal({ product, onClose }) {
                 : <span className="text-gray-800">HF — Halbfabrikat (internal)</span>}
             </div>
           </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
-              Product-ID
-            </p>
-            <div className="px-3 py-2.5 rounded-xl bg-gray-50 border border-gray-100 text-sm min-h-[40px]">
-              {product.productId
-                ? <span className="text-gray-800">{product.productId}</span>
-                : <span className="text-gray-300 italic">Not set</span>}
-            </div>
-          </div>
           {product.shelfLifeMonths != null && (
             <div>
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
