@@ -829,7 +829,13 @@ function CountryInventoryTab({ userProfile, products }) {
     const receivedOrderQty = batches.filter(b => b.source === "order" && b.deliveredAt && (baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec)).reduce((s, b) => s + (b.qty || 0), 0);
     // Check current inventory under current key or any historical key
     const submittedCurrentQty = allPKeys.reduce((val, k) => val ?? baseDemand?.currentInventory?.[k] ?? null, null);
-    const totalCurrentQty = (submittedCurrentQty ?? 0) + receivedOrderQty;
+    // If submission exists for this product: use it + post-submission orders.
+    // If not: fall back to all physical batches (avoids silently zeroing manually-uploaded stock).
+    const hasSubmittedInventory = submittedCurrentQty != null;
+    const allPhysicalQty = batches.reduce((s, b) => s + (b.qty || 0), 0);
+    const totalCurrentQty = hasSubmittedInventory
+      ? submittedCurrentQty + receivedOrderQty
+      : allPhysicalQty;
 
     const expiries = batches.map(b => getComputedExpiry(b, p.shelfLifeMonths)).filter(Boolean);
     const earliestExpiry = expiries.length > 0 ? expiries.reduce((min, d) => d < min ? d : min) : null;

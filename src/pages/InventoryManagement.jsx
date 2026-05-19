@@ -999,7 +999,13 @@ function EstimatedSafetyStockTab({ items, products, demands, messages, hiddenPro
     // Order batches received after the base demand submission (avoids double-counting initial stock)
     const orderBatchQty = r.orderBatches.filter(b => baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec).reduce((s, b) => s + (b.qty || 0), 0);
     const nonOrderBatchQty = r.nonOrderBatches.filter(b => b.source !== "mrp").reduce((s, b) => s + (b.qty || 0), 0);
-    const currentQty = submittedCurrent + orderBatchQty + nonOrderBatchQty;
+    // Only one source contributes the opening stock: the demand submission when it exists,
+    // or all physical records as fallback. Never sum both — that double-counts.
+    const demandHasInventory = allPKeys.some(k => latestDemand?.currentInventory?.[k] != null);
+    const allOrderBatchQty = r.orderBatches.reduce((s, b) => s + (b.qty || 0), 0);
+    const currentQty = demandHasInventory
+      ? submittedCurrent + orderBatchQty          // submission + any new orders since
+      : nonOrderBatchQty + allOrderBatchQty;      // no submission — fall back to all physical records
 
     // For expected demand, use current month demand
     const currentMonthDemand = currentMonthDemands.find(d => (d.country || "") === cKey);
