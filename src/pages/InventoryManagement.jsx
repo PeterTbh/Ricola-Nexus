@@ -679,7 +679,7 @@ function EditSubmissionModal({ demand, productKey, productName, qty, onClose }) 
 }
 
 // ─── Stock Levels Tab ─────────────────────────────────────────────────────────
-function StockLevelsTab({ items, products, loading, demands }) {
+function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys = new Set() }) {
   const [sortBy, setSortBy] = useState("country");
   const [expandedKey, setExpandedKey] = useState(null);
   const [shelfLifeTarget, setShelfLifeTarget] = useState(null);
@@ -738,11 +738,12 @@ function StockLevelsTab({ items, products, loading, demands }) {
     const baseSec = r._baseDemandTimeSec ?? 0;
     // Only count order batches received after the base demand to avoid double-counting initial stock
     const batchQty = r.currentBatches.reduce((s, b) => {
+      if (b.source === "mrp") return s; // cross-validation only — qty lives in demand submissions
       if (b.source === "order" && b.deliveredAt && baseSec > 0 && (b.deliveredAt.seconds ?? 0) < baseSec) return s;
       return s + (b.qty || 0);
     }, 0);
     return { ...r, currentQty: batchQty + r.submittedQty, productName: productMap[r.productKey]?.name ?? r.productKey };
-  });
+  }).filter(r => !hiddenProductKeys.has(r.productKey));
 
   const sortFn = {
     country: (a, b) => a.entity.localeCompare(b.entity) || a.productName.localeCompare(b.productName),
@@ -945,7 +946,7 @@ function StockLevelsTab({ items, products, loading, demands }) {
 }
 
 // ─── Estimated Safety Stock Tab ───────────────────────────────────────────────
-function EstimatedSafetyStockTab({ items, products, demands, messages }) {
+function EstimatedSafetyStockTab({ items, products, demands, messages, hiddenProductKeys = new Set() }) {
   const MONTHS_LIST = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const CURRENT_MONTH = `${MONTHS_LIST[new Date().getMonth()]} ${new Date().getFullYear()}`;
   const productMap = {};
@@ -997,7 +998,7 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
     const submittedCurrent = allPKeys.reduce((val, k) => val ?? latestDemand?.currentInventory?.[k] ?? null, null) ?? 0;
     // Order batches received after the base demand submission (avoids double-counting initial stock)
     const orderBatchQty = r.orderBatches.filter(b => baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec).reduce((s, b) => s + (b.qty || 0), 0);
-    const nonOrderBatchQty = r.nonOrderBatches.reduce((s, b) => s + (b.qty || 0), 0);
+    const nonOrderBatchQty = r.nonOrderBatches.filter(b => b.source !== "mrp").reduce((s, b) => s + (b.qty || 0), 0);
     const currentQty = submittedCurrent + orderBatchQty + nonOrderBatchQty;
 
     // For expected demand, use current month demand
@@ -1019,7 +1020,7 @@ function EstimatedSafetyStockTab({ items, products, demands, messages }) {
       currentQty, expectedDemand, safetyStock: currentQty - expectedDemand,
       hasResolved: !!resolvedMsg, desiredManual,
     };
-  });
+  }).filter(r => !hiddenProductKeys.has(r.productKey));
 
   // Group by country
   const grouped = {};
@@ -1289,6 +1290,7 @@ export default function InventoryManagement() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState([]);
+  const [hiddenProductKeys, setHiddenProductKeys] = useState(new Set());
   const [demands, setDemands] = useState([]);
   const [messages, setMessages] = useState([]);
   const [waste, setWaste] = useState([]);
@@ -1305,7 +1307,14 @@ export default function InventoryManagement() {
   useEffect(() => {
     const q = query(collection(db, "products"), orderBy("order"));
     return onSnapshot(q, (snap) => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setProducts(all.filter(p => !p.archived && !p.hidden));
+      const hiddenKeys = new Set();
+      all.filter(p => p.hidden && !p.archived).forEach(p => {
+        hiddenKeys.add(p.key);
+        (p.keyHistory || []).forEach(k => hiddenKeys.add(k));
+      });
+      setHiddenProductKeys(hiddenKeys);
     }, () => {});
   }, []);
 
@@ -1348,10 +1357,10 @@ export default function InventoryManagement() {
       </div>
 
       {activeTab === "stock" && (
-        <StockLevelsTab items={items} products={products} loading={loading} demands={demands} />
+        <StockLevelsTab items={items} products={products} loading={loading} demands={demands} hiddenProductKeys={hiddenProductKeys} />
       )}
       {activeTab === "safety" && (
-        <EstimatedSafetyStockTab items={items} products={products} demands={demands} messages={messages} />
+        <EstimatedSafetyStockTab items={items} products={products} demands={demands} messages={messages} hiddenProductKeys={hiddenProductKeys} />
       )}
       {activeTab === "flow" && (
         <StockFlowTab items={items} products={products} demands={demands} waste={waste} messages={messages} />

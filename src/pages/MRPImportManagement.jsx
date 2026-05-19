@@ -161,7 +161,7 @@ function UploadMRPModal({ onClose, onImported }) {
     });
     getDocs(collection(db, "products")).then(snap => {
       setKnownProducts(
-        snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived)
+        snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived && !p.hidden)
       );
     });
   }, []);
@@ -347,15 +347,8 @@ function UploadMRPModal({ onClose, onImported }) {
             updatedAt: serverTimestamp(),
           });
         }
-        if (r.currentInventoryQty !== null && r.currentInventoryQty > 0) {
-          await addDoc(collection(db, "inventory"), {
-            productKey: r.productKey, entity,
-            batchId: "", qty: r.currentInventoryQty, expiryDate: null,
-            source: "mrp", levelType: "current",
-            period: r.period, mrpImportId: mrpRef.id,
-            updatedAt: serverTimestamp(),
-          });
-        }
+        // currentInventoryQty is stored in mrpImports.rows for cross-validation only;
+        // writing it to inventory would double-count against demand planner submissions.
       }
 
       onImported?.();
@@ -711,7 +704,7 @@ function ActivationValidationModal({ imp, imports, onClose, onActivated }) {
         getDocs(query(collection(db, "users"), where("isApproved", "==", true))),
         getDocs(collection(db, "mrpImports")),
       ]);
-      const products = prodSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived);
+      const products = prodSnap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived && !p.hidden);
       const fromUsers = usersSnap.docs.map(d => d.data().country).filter(Boolean);
       // countries from other imports (not this one) form the "existing" pool
       const fromMrp = mrpSnap.docs

@@ -504,7 +504,7 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
   const [expandedProduct, setExpandedProduct] = useState(null);
 
   const orderBatches = inventory.filter(i => i.source === "order" && (!i.levelType || i.levelType === "current"));
-  const initialBatches = inventory.filter(i => i.source !== "order" && (!i.levelType || i.levelType === "current"));
+  const initialBatches = inventory.filter(i => i.source !== "order" && i.source !== "mrp" && (!i.levelType || i.levelType === "current"));
   const sortedDemands = [...demands].sort((a, b) => parseMonthToDate(a.month) - parseMonthToDate(b.month));
 
   // Map inventoryDocId → total wasted qty, so ordersIn always reflects original delivered amount
@@ -820,7 +820,7 @@ function CountryInventoryTab({ userProfile, products }) {
     return { qty: 0, source: "none" };
   };
 
-  const currentBatchItems = inventory.filter(i => !i.levelType || i.levelType === "current");
+  const currentBatchItems = inventory.filter(i => i.source !== "mrp" && (!i.levelType || i.levelType === "current"));
 
   const productGroups = products.map(p => {
     const allPKeys = [p.key, ...(p.keyHistory || [])];
@@ -1311,7 +1311,7 @@ function CountryOrdersTab({ userProfile, products }) {
           qty: item.orderedQty, levelType: "current",
           deliveredAt: serverTimestamp(),
           deliveredBy: userProfile?.username || currentUser?.uid || "Unknown",
-          orderId: order.id, source: "order", period: order.month,
+          orderId: order.id, source: "order", period: order.period,
           updatedAt: serverTimestamp(),
         });
         batchIds.push(ref.id);
@@ -1751,7 +1751,7 @@ export default function CountryHeadDashboard() {
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        const active = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived);
+        const active = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived && !p.hidden);
         if (active.length > 0) {
           setProducts(active);
         }

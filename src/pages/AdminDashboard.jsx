@@ -17,7 +17,7 @@ import {
   Trash2, X, Archive, History, BarChart2, Table,
   ChevronRight, Info, Plus, Pencil, Save, MessageSquare,
   Upload, HelpCircle, Layers, FileSpreadsheet, AlertTriangle, Send, CheckCircle2,
-  ShoppingCart, Truck, ChevronDown, Bell, FlaskConical
+  ShoppingCart, Truck, ChevronDown, Bell, FlaskConical, EyeOff, Eye
 } from "lucide-react";
 
 const MONTHS = [
@@ -393,6 +393,13 @@ function ProductInfoModal({ product, products, onClose }) {
     setTimeout(() => setSaved(false), 2000);
   };
 
+  const handleToggleHidden = async () => {
+    setSaving(true);
+    await updateDoc(doc(db, "products", product.id), { hidden: !product.hidden });
+    setSaving(false);
+    onClose();
+  };
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
@@ -513,6 +520,18 @@ function ProductInfoModal({ product, products, onClose }) {
             {saved ? "Saved!" : "Save"}
           </button>
         </div>
+        <button
+          onClick={handleToggleHidden}
+          disabled={saving}
+          className={`w-full mt-2 flex items-center justify-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-colors disabled:opacity-60 ${
+            product.hidden
+              ? "border-green-300 text-green-700 hover:bg-green-50"
+              : "border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-50"
+          }`}
+        >
+          {product.hidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+          {product.hidden ? "Unhide Product" : "Hide Product"}
+        </button>
       </div>
     </div>
   );
@@ -680,6 +699,8 @@ function FormatInfoModal({ onClose }) {
             { col: "Column B", name: "Product Key", required: false, desc: 'The key used for import matching. Also accepted: "Key", "ProductKey". Auto-generated if omitted.' },
             { col: "Column C", name: "Notes", required: false, desc: 'Free-text notes about the product. Also accepted: "Note".' },
             { col: "Column D", name: "Type", required: false, desc: '"HF" (Halbfabrikat / semi-finished) or "FG" (Finished Good). Defaults to "HF" if omitted.' },
+            { col: "Column E", name: "Isomalt / t", required: false, desc: 'Isomalt required per ton of product (decimal). Also accepted: "Isomalt/t", "Isomalt", "IsomaltPerTon".' },
+            { col: "Column F", name: "Glucose / t", required: false, desc: 'Glucose required per ton of product (decimal). Also accepted: "Glucose/t", "Glucose", "GlucosePerTon", "Sugar / t", "Sugar".' },
           ].map(({ col, name, required, desc }) => (
             <div key={col} className="flex gap-3">
               <div className="w-20 text-xs font-semibold text-gray-500 shrink-0 pt-0.5">{col}</div>
@@ -708,19 +729,23 @@ function FormatInfoModal({ onClose }) {
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Product Key</th>
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Notes</th>
                   <th className="text-left px-3 py-2 font-semibold text-gray-700">Type</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Isomalt / t</th>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-700">Glucose / t</th>
                 </tr>
               </thead>
               <tbody>
                 {[
-                  ["Classic Herb Drops", "SKU-001", "Flagship product", "HF"],
-                  ["Honey & Herb Drops", "SKU-002", "", "HF"],
-                  ["Sugar Free Drops", "", "", "FG"],
+                  ["Classic Herb Drops", "SKU-001", "Flagship product", "HF", "0.35", "0.12"],
+                  ["Honey & Herb Drops", "SKU-002", "", "HF", "0.28", ""],
+                  ["Sugar Free Drops", "", "", "FG", "", ""],
                 ].map((row, i) => (
                   <tr key={i} className="border-b border-gray-50 last:border-0">
                     <td className="px-3 py-2 text-gray-700">{row[0]}</td>
                     <td className="px-3 py-2 text-gray-600">{row[1] || <span className="text-gray-300 italic">empty</span>}</td>
                     <td className="px-3 py-2 text-gray-600">{row[2] || <span className="text-gray-300 italic">empty</span>}</td>
                     <td className="px-3 py-2 text-gray-600">{row[3]}</td>
+                    <td className="px-3 py-2 text-gray-600">{row[4] || <span className="text-gray-300 italic">empty</span>}</td>
+                    <td className="px-3 py-2 text-gray-600">{row[5] || <span className="text-gray-300 italic">empty</span>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -775,10 +800,12 @@ function UploadProductsModal({ onClose }) {
         }
 
         const header = rows[0].map(h => String(h).toLowerCase().trim());
-        const nameIdx  = header.findIndex(h => ["name", "product name"].includes(h));
-        const keyIdx   = header.findIndex(h => ["product key", "key", "productkey"].includes(h));
-        const notesIdx = header.findIndex(h => ["notes", "note"].includes(h));
-        const typeIdx  = header.findIndex(h => ["type"].includes(h));
+        const nameIdx     = header.findIndex(h => ["name", "product name"].includes(h));
+        const keyIdx      = header.findIndex(h => ["product key", "key", "productkey"].includes(h));
+        const notesIdx    = header.findIndex(h => ["notes", "note"].includes(h));
+        const typeIdx     = header.findIndex(h => ["type"].includes(h));
+        const isomaltIdx  = header.findIndex(h => ["isomalt / t", "isomalt/t", "isomalt", "isomaltperton"].includes(h));
+        const glucoseIdx  = header.findIndex(h => ["glucose / t", "glucose/t", "glucose", "sugar / t", "sugar/t", "sugar", "glucoseperton", "sugarperton"].includes(h));
 
         if (nameIdx === -1) {
           setParseError('Could not find a "Name" column. Please check the format and try again.');
@@ -789,12 +816,16 @@ function UploadProductsModal({ onClose }) {
           .filter(row => String(row[nameIdx] ?? "").trim())
           .map((row, i) => {
             const rawType = typeIdx >= 0 ? String(row[typeIdx] ?? "").trim().toUpperCase() : "";
+            const rawIso  = isomaltIdx >= 0 ? parseFloat(row[isomaltIdx]) : NaN;
+            const rawGlu  = glucoseIdx >= 0 ? parseFloat(row[glucoseIdx]) : NaN;
             return {
               _id: `p_${i}`,
               name: String(row[nameIdx] ?? "").trim(),
               productKey: keyIdx >= 0 ? String(row[keyIdx] ?? "").trim() : "",
               notes: notesIdx >= 0 ? String(row[notesIdx] ?? "").trim() : "",
               type: rawType === "FG" ? "FG" : "HF",
+              isomaltPerTon: !isNaN(rawIso) && rawIso >= 0 ? rawIso : null,
+              sugarPerTon:   !isNaN(rawGlu) && rawGlu >= 0 ? rawGlu : null,
               included: true,
             };
           });
@@ -860,13 +891,15 @@ function UploadProductsModal({ onClose }) {
         }
         usedKeys.add(productKey);
         await addDoc(collection(db, "products"), {
-          name:       p.name.trim(),
-          notes:      p.notes.trim(),
-          type:       p.type || "HF",
-          key:        productKey,
-          keyHistory: [],
-          order:      maxOrder,
-          createdAt:  serverTimestamp(),
+          name:         p.name.trim(),
+          notes:        p.notes.trim(),
+          type:         p.type || "HF",
+          key:          productKey,
+          keyHistory:   [],
+          order:        maxOrder,
+          createdAt:    serverTimestamp(),
+          ...(p.isomaltPerTon != null && { isomaltPerTon: p.isomaltPerTon }),
+          ...(p.sugarPerTon   != null && { sugarPerTon:   p.sugarPerTon }),
         });
       }
       onClose();
@@ -1064,6 +1097,7 @@ function UploadProductsModal({ onClose }) {
 // ─── Product Management ────────────────────────────────────────────────────────
 function ProductManagement() {
   const [products, setProducts] = useState([]);
+  const [hiddenProducts, setHiddenProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [infoTarget, setInfoTarget] = useState(null);
   const [editTargetId, setEditTargetId] = useState(null);
@@ -1075,6 +1109,7 @@ function ProductManagement() {
   const [saving, setSaving] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [showFormatInfo, setShowFormatInfo] = useState(false);
+  const [showHiddenProducts, setShowHiddenProducts] = useState(false);
   const seedingRef = useRef(false);
   const migratingRef = useRef(false);
 
@@ -1103,7 +1138,8 @@ function ProductManagement() {
             }
           }
         }
-        setProducts(all.filter(p => !p.archived));
+        setProducts(all.filter(p => !p.archived && !p.hidden));
+        setHiddenProducts(all.filter(p => !p.archived && p.hidden));
         setLoading(false);
       }
     }, () => setLoading(false));
@@ -1145,6 +1181,15 @@ function ProductManagement() {
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs text-gray-400">Manage the products demand planners forecast for.</p>
         <div className="flex items-center gap-1.5">
+          {hiddenProducts.length > 0 && (
+            <button
+              onClick={() => setShowHiddenProducts(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-gray-600 hover:bg-gray-100 border border-transparent hover:border-gray-200 transition-colors"
+            >
+              <EyeOff className="w-3.5 h-3.5" />
+              Hidden ({hiddenProducts.length})
+            </button>
+          )}
           <button
             onClick={() => setShowFormatInfo(true)}
             title="Expected Excel format"
@@ -1304,6 +1349,61 @@ function ProductManagement() {
           product={deleteTarget}
           onClose={() => setDeleteTarget(null)}
         />
+      )}
+
+      {showHiddenProducts && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between mb-4 shrink-0">
+              <div className="flex items-center gap-2">
+                <EyeOff className="w-4 h-4 text-gray-400" />
+                <h3 className="font-bold text-gray-900">Hidden Products</h3>
+                <span className="text-xs text-gray-400 font-normal">({hiddenProducts.length})</span>
+              </div>
+              <button onClick={() => setShowHiddenProducts(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mb-4 shrink-0">These products are hidden from all views. Their records are fully intact.</p>
+            <div className="overflow-y-auto space-y-2 flex-1">
+              {hiddenProducts.map(product => (
+                <div key={product.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 bg-gray-50">
+                  <div className="w-7 h-7 rounded-lg bg-gray-200 flex items-center justify-center shrink-0">
+                    <Package className="w-3.5 h-3.5 text-gray-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-500 truncate">{product.name}</p>
+                    <p className="text-xs text-gray-400">{product.type || "HF"} · {product.key}</p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => { setInfoTarget(product); setShowHiddenProducts(false); }}
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-gray-400 hover:text-gray-600 hover:bg-white border border-transparent hover:border-gray-200 transition-colors"
+                    >
+                      <Info className="w-3 h-3" />
+                      Info
+                    </button>
+                    <button
+                      onClick={async () => {
+                        await updateDoc(doc(db, "products", product.id), { hidden: false });
+                      }}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 border border-green-200 transition-colors"
+                    >
+                      <Eye className="w-3 h-3" />
+                      Unhide
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowHiddenProducts(false)}
+              className="mt-4 w-full px-4 py-2 rounded-xl border border-gray-200 text-gray-600 text-sm font-medium hover:bg-gray-50 transition-colors shrink-0"
+            >
+              Close
+            </button>
+          </div>
+        </div>
       )}
 
       {showUpload && <UploadProductsModal onClose={() => setShowUpload(false)} />}
@@ -2120,7 +2220,7 @@ function DemandOverview() {
   useEffect(() => {
     const q = query(collection(db, "products"), orderBy("order"));
     const unsubscribe = onSnapshot(q, (snap) => {
-      const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived);
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived && !p.hidden);
       if (all.length > 0) {
         setProducts(all);
       } else {
@@ -2830,7 +2930,7 @@ function DiscrepanciesSection() {
   useEffect(() => {
     const q = query(collection(db, "products"), orderBy("order"));
     return onSnapshot(q, snap => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived && !p.hidden));
     });
   }, []);
 
@@ -3485,7 +3585,7 @@ function OrdersSection() {
 
   useEffect(() => {
     return onSnapshot(query(collection(db, "products"), orderBy("order")), snap => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived && !p.hidden));
     });
   }, []);
 
@@ -4126,7 +4226,7 @@ function MaterialManagement() {
 
   useEffect(() => {
     return onSnapshot(collection(db, "products"), snap => {
-      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived));
+      setProducts(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(p => !p.archived && !p.hidden));
     });
   }, []);
 
