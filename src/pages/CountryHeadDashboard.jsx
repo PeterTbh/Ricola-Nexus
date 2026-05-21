@@ -829,9 +829,10 @@ function CountryInventoryTab({ userProfile, products }) {
     const receivedOrderQty = batches.filter(b => b.source === "order" && b.deliveredAt && (baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec)).reduce((s, b) => s + (b.qty || 0), 0);
     // Check current inventory under current key or any historical key
     const submittedCurrentQty = allPKeys.reduce((val, k) => val ?? baseDemand?.currentInventory?.[k] ?? null, null);
-    // If submission exists for this product: use it + post-submission orders.
-    // If not: fall back to all physical batches (avoids silently zeroing manually-uploaded stock).
-    const hasSubmittedInventory = submittedCurrentQty != null;
+    // Only use demand submission as opening balance when it reports actual stock (> 0).
+    // Submission = 0 means "nothing on hand at time of submission" — fall back to physical batches
+    // so pre-submission order records are still counted (matches StockLevelsTab behaviour).
+    const hasSubmittedInventory = submittedCurrentQty != null && submittedCurrentQty > 0;
     const allPhysicalQty = batches.reduce((s, b) => s + (b.qty || 0), 0);
     const totalCurrentQty = hasSubmittedInventory
       ? submittedCurrentQty + receivedOrderQty
@@ -1853,22 +1854,24 @@ export default function CountryHeadDashboard() {
     setSubmitting(true);
     try {
       const country = userProfile?.country || "";
-      const payload = {
+      const basePayload = {
         ...values,
         currentInventory: cInv,
         desiredInventory: Object.keys(dInv).length > 0 ? dInv : null,
         comment: comment.trim(),
         country,
-        submittedAt: serverTimestamp(),
       };
       if (existingDoc && editMode) {
-        await updateDoc(doc(db, "demands", existingDoc.id), payload);
+        // Do NOT overwrite submittedAt on edit — the original timestamp is the order-deduplication
+        // cutoff. Resetting it would exclude orders received between first submission and this edit.
+        await updateDoc(doc(db, "demands", existingDoc.id), { ...basePayload, updatedAt: serverTimestamp() });
       } else if (!existingDoc) {
         await addDoc(collection(db, "demands"), {
           userId: currentUser.uid,
           username: userProfile?.username || "Unknown",
           month: selectedMonth,
-          ...payload,
+          ...basePayload,
+          submittedAt: serverTimestamp(),
         });
       }
       setSubmitSuccess(true);

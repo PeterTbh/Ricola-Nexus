@@ -836,7 +836,7 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
                             {row.currentQty > 0 ? row.currentQty.toFixed(2) : <span className="text-gray-300">—</span>}
                           </td>
                           <td className="px-4 py-3 text-right text-xs text-gray-400">
-                            {row.currentBatches.length + (row.submittedQty > 0 ? 1 : 0)}
+                            {row.currentBatches.filter(b => b.source !== "mrp").length + (row.submittedQty > 0 ? 1 : 0)}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1 justify-end">
@@ -889,20 +889,23 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
                                         </td>
                                       </tr>
                                     )}
-                                    {row.currentBatches.map(b => (
-                                      <tr key={b.id} className="hover:bg-white">
-                                        <td className="px-3 py-2 text-gray-600">{b.batchId || "—"}</td>
-                                        <td className="px-3 py-2 tabular-nums font-semibold text-[#2D6A2D]">{(b.qty ?? 0).toFixed(2)}</td>
-                                        <td className="px-3 py-2 text-gray-500">{fmtDate(computeExpiry(b, productMap[b.productKey]?.shelfLifeMonths))}</td>
-                                        <td className="px-3 py-2 text-gray-400">{b.source || "—"}</td>
-                                        <td className="px-3 py-2">
-                                          <div className="flex gap-1 justify-end">
-                                            <button onClick={() => setEditTarget(b)} className="p-1 rounded text-gray-300 hover:text-[#2D6A2D] hover:bg-green-50 transition-colors" title="Edit"><Pencil className="w-3 h-3" /></button>
-                                            <button onClick={() => setDeleteTarget(b)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete"><Trash2 className="w-3 h-3" /></button>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    ))}
+                                    {row.currentBatches.map(b => {
+                                      const isMrp = b.source === "mrp";
+                                      return (
+                                        <tr key={b.id} className={isMrp ? "opacity-50 bg-gray-50/50" : "hover:bg-white"}>
+                                          <td className="px-3 py-2 text-gray-600">{b.batchId || "—"}</td>
+                                          <td className={`px-3 py-2 tabular-nums font-semibold ${isMrp ? "text-gray-400" : "text-[#2D6A2D]"}`}>{(b.qty ?? 0).toFixed(2)}</td>
+                                          <td className="px-3 py-2 text-gray-500">{fmtDate(computeExpiry(b, productMap[b.productKey]?.shelfLifeMonths))}</td>
+                                          <td className="px-3 py-2 text-gray-400">{isMrp ? <span className="italic text-gray-300">mrp (ref only)</span> : (b.source || "—")}</td>
+                                          <td className="px-3 py-2">
+                                            <div className="flex gap-1 justify-end">
+                                              <button onClick={() => setEditTarget(b)} className="p-1 rounded text-gray-300 hover:text-[#2D6A2D] hover:bg-green-50 transition-colors" title="Edit"><Pencil className="w-3 h-3" /></button>
+                                              <button onClick={() => setDeleteTarget(b)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete"><Trash2 className="w-3 h-3" /></button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
                                   </tbody>
                                 </table>
                               </div>
@@ -953,10 +956,10 @@ function EstimatedSafetyStockTab({ items, products, demands, messages, hiddenPro
   products.forEach(p => { productMap[p.key] = p; (p.keyHistory || []).forEach(k => { productMap[k] = p; }); });
   const normalizeProductKey = (key) => productMap[key]?.key ?? key;
 
-  // Latest demand per country (for current inventory display — not restricted to current month)
+  // Latest demand WITH currentInventory per country (matches StockLevelsTab — only consider docs that have inventory data)
   const latestDemandByCountryESS = {};
   for (const d of demands) {
-    if (!d.country) continue;
+    if (!d.country || !d.currentInventory) continue;
     const k = d.country;
     const cur = latestDemandByCountryESS[k];
     if (!cur || (d.submittedAt?.seconds ?? 0) > (cur.submittedAt?.seconds ?? 0)) {
@@ -999,13 +1002,14 @@ function EstimatedSafetyStockTab({ items, products, demands, messages, hiddenPro
     // Order batches received after the base demand submission (avoids double-counting initial stock)
     const orderBatchQty = r.orderBatches.filter(b => baseDemandTimeSec === 0 || (b.deliveredAt.seconds ?? 0) >= baseDemandTimeSec).reduce((s, b) => s + (b.qty || 0), 0);
     const nonOrderBatchQty = r.nonOrderBatches.filter(b => b.source !== "mrp").reduce((s, b) => s + (b.qty || 0), 0);
-    // Only one source contributes the opening stock: the demand submission when it exists,
-    // or all physical records as fallback. Never sum both — that double-counts.
+    // Only use demand submission as the opening balance when it actually reports stock (> 0).
+    // When submission is 0, fall back to physical records — this mirrors StockLevelsTab which skips
+    // zero-inventory products when setting the timestamp cutoff, causing all order batches to be counted.
     const demandHasInventory = allPKeys.some(k => latestDemand?.currentInventory?.[k] != null);
     const allOrderBatchQty = r.orderBatches.reduce((s, b) => s + (b.qty || 0), 0);
-    const currentQty = demandHasInventory
-      ? submittedCurrent + orderBatchQty          // submission + any new orders since
-      : nonOrderBatchQty + allOrderBatchQty;      // no submission — fall back to all physical records
+    const currentQty = (demandHasInventory && submittedCurrent > 0)
+      ? submittedCurrent + orderBatchQty   // submission has stock: opening balance + post-submission orders
+      : nonOrderBatchQty + allOrderBatchQty; // submission is 0 or absent: all physical non-MRP records
 
     // For expected demand, use current month demand
     const currentMonthDemand = currentMonthDemands.find(d => (d.country || "") === cKey);
