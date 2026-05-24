@@ -5,6 +5,7 @@ import {
 } from "firebase/firestore";
 import * as XLSX from "xlsx";
 import { db } from "../firebase";
+import { useAuth } from "../contexts/AuthContext";
 import {
   Plus, Pencil, Trash2, Save, X, Upload, Loader2,
   AlertCircle, HelpCircle, Layers, ChevronDown, ChevronRight,
@@ -39,6 +40,20 @@ function batchBelongsToPeriodIM(batch, monthStr, monthsList) {
   if (!d) return false;
   const [mName, mYear] = monthStr.split(" ");
   return d.getFullYear() === Number(mYear) && monthsList.indexOf(mName) === d.getMonth();
+}
+
+// Returns Unix seconds for the first day of the month described by "Month YYYY".
+// Used as the order-deduplication cutoff: orders delivered on or after this date
+// are counted as additive to the demand submission's opening stock figure.
+// Using month-start (not submittedAt) means edits in hindsight don't retroactively
+// exclude orders that arrived during the period.
+const _IM_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+function monthStartSec(monthStr) {
+  if (!monthStr) return 0;
+  const [name, year] = monthStr.split(" ");
+  const idx = _IM_MONTHS.indexOf(name);
+  if (idx === -1 || !year) return 0;
+  return Math.floor(new Date(parseInt(year), idx, 1).getTime() / 1000);
 }
 
 function computeExpiry(batch, shelfLifeMonths) {
@@ -680,6 +695,7 @@ function EditSubmissionModal({ demand, productKey, productName, qty, onClose }) 
 
 // ─── Stock Levels Tab ─────────────────────────────────────────────────────────
 function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys = new Set() }) {
+  const { isDemo } = useAuth();
   const [sortBy, setSortBy] = useState("country");
   const [expandedKey, setExpandedKey] = useState(null);
   const [shelfLifeTarget, setShelfLifeTarget] = useState(null);
@@ -714,7 +730,7 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
     if (!summaryMap[key]) {
       summaryMap[key] = { entity: item.entity, productKey: normKey, currentBatches: [], submittedQty: 0, demandDoc: null, submittedExpiry: null, _baseDemandTimeSec: 0 };
     }
-    summaryMap[key].currentBatches.push(item);
+    if ((item.qty || 0) > 0) summaryMap[key].currentBatches.push(item);
   }
   // Merge in demand-submitted current inventory (latest submission per country)
   for (const demand of Object.values(latestDemandByCountrySL)) {
@@ -730,7 +746,7 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
       summaryMap[key].submittedQty += Number(qty) || 0;
       summaryMap[key].demandDoc = demand;
       summaryMap[key].submittedExpiry = demand.currentInventoryExpiry?.[normPk] ?? demand.currentInventoryExpiry?.[pk] ?? null;
-      summaryMap[key]._baseDemandTimeSec = demand.submittedAt?.seconds ?? 0;
+      summaryMap[key]._baseDemandTimeSec = monthStartSec(demand.month);
     }
   }
 
@@ -784,12 +800,16 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
           <button onClick={() => setShowFormat(true)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-[#2D6A2D] hover:bg-gray-100 border border-transparent hover:border-gray-200 transition-colors">
             <HelpCircle className="w-3.5 h-3.5" />Format
           </button>
-          <button onClick={() => setShowUpload(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors">
-            <Upload className="w-3.5 h-3.5" />Upload Excel
-          </button>
-          <button onClick={() => setShowAdd(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#2D6A2D] text-white hover:bg-[#1A4A1A] transition-colors">
-            <Plus className="w-3.5 h-3.5" />Add Batch
-          </button>
+          {!isDemo && (
+            <button onClick={() => setShowUpload(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors">
+              <Upload className="w-3.5 h-3.5" />Upload Excel
+            </button>
+          )}
+          {!isDemo && (
+            <button onClick={() => setShowAdd(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#2D6A2D] text-white hover:bg-[#1A4A1A] transition-colors">
+              <Plus className="w-3.5 h-3.5" />Add Batch
+            </button>
+          )}
         </div>
       </div>
 
@@ -877,7 +897,7 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
                                         <td className="px-3 py-2 text-gray-500">{row.submittedExpiry ? fmtDate(row.submittedExpiry) : <span className="text-gray-300">—</span>}</td>
                                         <td className="px-3 py-2 text-blue-400 text-xs">Demand planner</td>
                                         <td className="px-3 py-2">
-                                          {row.demandDoc && (
+                                          {row.demandDoc && !isDemo && (
                                             <button
                                               onClick={() => setEditSubmission({ demand: row.demandDoc, productKey: row.productKey, productName: row.productName, qty: row.submittedQty })}
                                               className="p-1 rounded text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors"
@@ -889,23 +909,30 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
                                         </td>
                                       </tr>
                                     )}
-                                    {row.currentBatches.map(b => {
-                                      const isMrp = b.source === "mrp";
-                                      return (
-                                        <tr key={b.id} className={isMrp ? "opacity-50 bg-gray-50/50" : "hover:bg-white"}>
-                                          <td className="px-3 py-2 text-gray-600">{b.batchId || "—"}</td>
-                                          <td className={`px-3 py-2 tabular-nums font-semibold ${isMrp ? "text-gray-400" : "text-[#2D6A2D]"}`}>{(b.qty ?? 0).toFixed(2)}</td>
-                                          <td className="px-3 py-2 text-gray-500">{fmtDate(computeExpiry(b, productMap[b.productKey]?.shelfLifeMonths))}</td>
-                                          <td className="px-3 py-2 text-gray-400">{isMrp ? <span className="italic text-gray-300">mrp (ref only)</span> : (b.source || "—")}</td>
-                                          <td className="px-3 py-2">
-                                            <div className="flex gap-1 justify-end">
-                                              <button onClick={() => setEditTarget(b)} className="p-1 rounded text-gray-300 hover:text-[#2D6A2D] hover:bg-green-50 transition-colors" title="Edit"><Pencil className="w-3 h-3" /></button>
-                                              <button onClick={() => setDeleteTarget(b)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete"><Trash2 className="w-3 h-3" /></button>
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
+                                    {(() => {
+                                      const totalMrpQty = row.currentBatches.filter(b => b.source === "mrp").reduce((s, b) => s + (b.qty || 0), 0);
+                                      const mrpReconciled = row.submittedQty > 0 && Math.abs(totalMrpQty - row.submittedQty) < 0.01;
+                                      return row.currentBatches.map(b => {
+                                        const isMrp = b.source === "mrp";
+                                        if (isMrp && mrpReconciled) return null;
+                                        return (
+                                          <tr key={b.id} className={isMrp ? "opacity-50 bg-gray-50/50" : "hover:bg-white"}>
+                                            <td className="px-3 py-2 text-gray-600">{b.batchId || "—"}</td>
+                                            <td className={`px-3 py-2 tabular-nums font-semibold ${isMrp ? "text-gray-400" : "text-[#2D6A2D]"}`}>{(b.qty ?? 0).toFixed(2)}</td>
+                                            <td className="px-3 py-2 text-gray-500">{fmtDate(computeExpiry(b, productMap[b.productKey]?.shelfLifeMonths))}</td>
+                                            <td className="px-3 py-2 text-gray-400">{isMrp ? <span className="italic text-gray-300">mrp (ref only)</span> : (b.source || "—")}</td>
+                                            <td className="px-3 py-2">
+                                              {!isDemo && (
+                                                <div className="flex gap-1 justify-end">
+                                                  <button onClick={() => setEditTarget(b)} className="p-1 rounded text-gray-300 hover:text-[#2D6A2D] hover:bg-green-50 transition-colors" title="Edit"><Pencil className="w-3 h-3" /></button>
+                                                  <button onClick={() => setDeleteTarget(b)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete"><Trash2 className="w-3 h-3" /></button>
+                                                </div>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        );
+                                      });
+                                    })()}
                                   </tbody>
                                 </table>
                               </div>
@@ -975,6 +1002,7 @@ function EstimatedSafetyStockTab({ items, products, demands, messages, hiddenPro
     const normKey = normalizeProductKey(item.productKey);
     const key = `${item.entity}||${normKey}`;
     if (!summaryMap[key]) summaryMap[key] = { entity: item.entity, productKey: normKey, orderBatches: [], nonOrderBatches: [] };
+    if ((item.qty || 0) <= 0) continue;
     if (item.source === "order" && item.deliveredAt) {
       summaryMap[key].orderBatches.push(item);
     } else {
@@ -995,7 +1023,7 @@ function EstimatedSafetyStockTab({ items, products, demands, messages, hiddenPro
   const rows = Object.values(summaryMap).map(r => {
     const cKey = r.entity;
     const latestDemand = latestDemandByCountryESS[cKey];
-    const baseDemandTimeSec = latestDemand?.submittedAt?.seconds ?? 0;
+    const baseDemandTimeSec = monthStartSec(latestDemand?.month);
     const allPKeys = [r.productKey, ...(productMap[r.productKey]?.keyHistory || [])];
 
     const submittedCurrent = allPKeys.reduce((val, k) => val ?? latestDemand?.currentInventory?.[k] ?? null, null) ?? 0;

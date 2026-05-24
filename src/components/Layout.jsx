@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useState, useContext } from "react";
 import { signOut } from "firebase/auth";
 import { auth } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
-import { LogOut, ChevronDown } from "lucide-react";
+import { DemoViewContext } from "../contexts/DemoContext";
+import { LogOut, ChevronDown, Eye } from "lucide-react";
 import RicolaIcon from "./RicolaIcon";
 
 export default function Layout({ children }) {
-  const { userProfile, currentUser } = useAuth();
+  const { userProfile, currentUser, isDemo } = useAuth();
+  const { demoView, setDemoView } = useContext(DemoViewContext);
   const [profileOpen, setProfileOpen] = useState(false);
 
   const handleSignOut = async () => {
@@ -14,10 +16,11 @@ export default function Layout({ children }) {
   };
 
   const roleLabel =
+    isDemo ? (demoView === "admin" ? "Administrator" : "Demand Planner") :
     userProfile?.role === "admin" ? "Administrator" :
     "Demand Planner";
   const roleBadgeColor =
-    userProfile?.role === "admin" ? "bg-yellow-100 text-yellow-800" :
+    userProfile?.role === "admin" || (isDemo && demoView === "admin") ? "bg-yellow-100 text-yellow-800" :
     "bg-green-100 text-green-800";
 
   return (
@@ -34,6 +37,24 @@ export default function Layout({ children }) {
                 <p className="text-[#a8d5a8] text-xs leading-none mt-0.5 hidden sm:block">Demand Intelligence</p>
               </div>
             </div>
+
+            {/* Demo view switcher */}
+            {isDemo && (
+              <div className="flex items-center gap-1 bg-[#1A4A1A] rounded-xl p-1">
+                <button
+                  onClick={() => setDemoView("admin")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${demoView === "admin" ? "bg-[#F5C500] text-[#2D6A2D]" : "text-[#a8d5a8] hover:text-white"}`}
+                >
+                  Admin View
+                </button>
+                <button
+                  onClick={() => setDemoView("planner")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${demoView === "planner" ? "bg-[#F5C500] text-[#2D6A2D]" : "text-[#a8d5a8] hover:text-white"}`}
+                >
+                  Demand Planner
+                </button>
+              </div>
+            )}
 
             {/* Profile dropdown */}
             <div className="relative">
@@ -82,6 +103,14 @@ export default function Layout({ children }) {
       {/* Click outside to close profile */}
       {profileOpen && (
         <div className="fixed inset-0 z-30" onClick={() => setProfileOpen(false)} />
+      )}
+
+      {/* Demo banner */}
+      {isDemo && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-center gap-2">
+          <Eye className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+          <span className="text-xs font-semibold text-amber-700">Demo Mode — Read Only. No changes can be saved.</span>
+        </div>
       )}
 
       {/* Main content */}

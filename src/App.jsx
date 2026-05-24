@@ -4,6 +4,7 @@ import AuthPage from "./pages/AuthPage";
 import PendingPage from "./pages/PendingPage";
 import AdminDashboard from "./pages/AdminDashboard";
 import CountryHeadDashboard from "./pages/CountryHeadDashboard";
+import DemoDashboard from "./pages/DemoDashboard";
 import { Loader2 } from "lucide-react";
 import RicolaIcon from "./components/RicolaIcon";
 
@@ -57,6 +58,16 @@ function AppRoutes() {
       <Routes>
         <Route path="/dashboard" element={<CountryHeadDashboard />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      </Routes>
+    );
+  }
+
+  // Demo
+  if (userProfile.role === "demo") {
+    return (
+      <Routes>
+        <Route path="/demo" element={<DemoDashboard />} />
+        <Route path="*" element={<Navigate to="/demo" replace />} />
       </Routes>
     );
   }

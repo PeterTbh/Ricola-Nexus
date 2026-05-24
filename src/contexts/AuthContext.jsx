@@ -43,8 +43,10 @@ export function AuthProvider({ children }) {
     }
   };
 
+  const isDemo = userProfile?.role === "demo";
+
   return (
-    <AuthContext.Provider value={{ currentUser, userProfile, loading, refreshProfile }}>
+    <AuthContext.Provider value={{ currentUser, userProfile, loading, refreshProfile, isDemo }}>
       {children}
     </AuthContext.Provider>
   );

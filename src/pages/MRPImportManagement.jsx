@@ -1006,6 +1006,7 @@ function DeleteImportModal({ imp, onClose, onDeleted }) {
 
 // ─── MRP Import Management ─────────────────────────────────────────────────────
 export default function MRPImportManagement() {
+  const { isDemo } = useAuth();
   const [imports, setImports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
@@ -1037,12 +1038,14 @@ export default function MRPImportManagement() {
         <p className="text-xs text-gray-400">
           Manage MRP run imports. Activate one to compare expected demand against demand planner submissions and detect discrepancies.
         </p>
-        <button
-          onClick={() => setShowUpload(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors"
-        >
-          <Upload className="w-3.5 h-3.5" />Import MRP Run
-        </button>
+        {!isDemo && (
+          <button
+            onClick={() => setShowUpload(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors"
+          >
+            <Upload className="w-3.5 h-3.5" />Import MRP Run
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -1068,16 +1071,18 @@ export default function MRPImportManagement() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {!imp.isActive && (
+                  {!imp.isActive && !isDemo && (
                     <button onClick={() => handleActivate(imp)}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors">
                       <CheckCircle className="w-3.5 h-3.5" />
                       Set Active
                     </button>
                   )}
-                  <button onClick={() => setDeleteTarget(imp)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 transition-colors" title="Delete">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  {!isDemo && (
+                    <button onClick={() => setDeleteTarget(imp)} className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 transition-colors" title="Delete">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                   <button onClick={() => setExpandedId(expandedId === imp.id ? null : imp.id)} className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 transition-colors" title="Show rows">
                     {expandedId === imp.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                   </button>

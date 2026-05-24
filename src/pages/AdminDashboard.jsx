@@ -352,6 +352,7 @@ function ArchivedRecordsModal({ onClose }) {
 
 // ─── Product Info Modal ────────────────────────────────────────────────────────
 function ProductInfoModal({ product, products, onClose }) {
+  const { isDemo } = useAuth();
   const [productKey, setProductKey] = useState(product.key || "");
   const [notes, setNotes] = useState(product.notes || "");
   const [type, setType] = useState(product.type || "HF");
@@ -511,27 +512,31 @@ function ProductInfoModal({ product, products, onClose }) {
           >
             Close
           </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
-          >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-            {saved ? "Saved!" : "Save"}
-          </button>
+          {!isDemo && (
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
+            >
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+              {saved ? "Saved!" : "Save"}
+            </button>
+          )}
         </div>
-        <button
-          onClick={handleToggleHidden}
-          disabled={saving}
-          className={`w-full mt-2 flex items-center justify-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-colors disabled:opacity-60 ${
-            product.hidden
-              ? "border-green-300 text-green-700 hover:bg-green-50"
-              : "border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-50"
-          }`}
-        >
-          {product.hidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-          {product.hidden ? "Unhide Product" : "Hide Product"}
-        </button>
+        {!isDemo && (
+          <button
+            onClick={handleToggleHidden}
+            disabled={saving}
+            className={`w-full mt-2 flex items-center justify-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-colors disabled:opacity-60 ${
+              product.hidden
+                ? "border-green-300 text-green-700 hover:bg-green-50"
+                : "border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            {product.hidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+            {product.hidden ? "Unhide Product" : "Hide Product"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1096,6 +1101,7 @@ function UploadProductsModal({ onClose }) {
 
 // ─── Product Management ────────────────────────────────────────────────────────
 function ProductManagement() {
+  const { isDemo } = useAuth();
   const [products, setProducts] = useState([]);
   const [hiddenProducts, setHiddenProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1198,13 +1204,15 @@ function ProductManagement() {
             <HelpCircle className="w-3.5 h-3.5" />
             Format
           </button>
-          <button
-            onClick={() => setShowUpload(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors"
-          >
-            <Upload className="w-3.5 h-3.5" />
-            Upload from Excel
-          </button>
+          {!isDemo && (
+            <button
+              onClick={() => setShowUpload(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 transition-colors"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              Upload from Excel
+            </button>
+          )}
         </div>
       </div>
 
@@ -1273,14 +1281,16 @@ function ProductManagement() {
                     <Info className="w-3.5 h-3.5" />
                     Info
                   </button>
-                  <button
-                    onClick={() => { setEditTargetId(product.id); setEditName(product.name); }}
-                    title="Edit product name"
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:text-[#2D6A2D] hover:bg-white border border-transparent hover:border-gray-200 transition-colors"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                    Edit
-                  </button>
+                  {!isDemo && (
+                    <button
+                      onClick={() => { setEditTargetId(product.id); setEditName(product.name); }}
+                      title="Edit product name"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:text-[#2D6A2D] hover:bg-white border border-transparent hover:border-gray-200 transition-colors"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      Edit
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -1324,7 +1334,7 @@ function ProductManagement() {
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
-        ) : (
+        ) : !isDemo ? (
           <button
             onClick={() => setAddingNew(true)}
             className="w-full flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-[#4A9E4A] hover:text-[#2D6A2D] text-sm font-medium transition-colors"
@@ -1332,7 +1342,7 @@ function ProductManagement() {
             <Plus className="w-4 h-4" />
             Add Product
           </button>
-        )}
+        ) : null}
       </div>
       )}
 
@@ -1383,15 +1393,17 @@ function ProductManagement() {
                       <Info className="w-3 h-3" />
                       Info
                     </button>
-                    <button
-                      onClick={async () => {
-                        await updateDoc(doc(db, "products", product.id), { hidden: false });
-                      }}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 border border-green-200 transition-colors"
-                    >
-                      <Eye className="w-3 h-3" />
-                      Unhide
-                    </button>
+                    {!isDemo && (
+                      <button
+                        onClick={async () => {
+                          await updateDoc(doc(db, "products", product.id), { hidden: false });
+                        }}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 border border-green-200 transition-colors"
+                      >
+                        <Eye className="w-3 h-3" />
+                        Unhide
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1646,6 +1658,7 @@ function ProductHistoryModal({ productKey, productKeyHistory = [], productLabel,
 
 // ─── Section: Pending Approvals ───────────────────────────────────────────────
 function PendingApprovals({ onApprove }) {
+  const { isDemo } = useAuth();
   const [pendingUsers, setPendingUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [functionInputs, setFunctionInputs] = useState({});
@@ -1832,28 +1845,30 @@ function PendingApprovals({ onApprove }) {
               </div>
             </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={() => handleApprove(user)}
-                disabled={!!actionLoading[user.id]}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-medium transition-colors disabled:opacity-60"
-              >
-                {actionLoading[user.id] === "approving"
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : <UserCheck className="w-4 h-4" />}
-                Approve
-              </button>
-              <button
-                onClick={() => handleReject(user.id)}
-                disabled={!!actionLoading[user.id]}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium transition-colors disabled:opacity-60 border border-red-200"
-              >
-                {actionLoading[user.id] === "rejecting"
-                  ? <Loader2 className="w-4 h-4 animate-spin" />
-                  : <UserX className="w-4 h-4" />}
-                Reject
-              </button>
-            </div>
+            {!isDemo && (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleApprove(user)}
+                  disabled={!!actionLoading[user.id]}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-medium transition-colors disabled:opacity-60"
+                >
+                  {actionLoading[user.id] === "approving"
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <UserCheck className="w-4 h-4" />}
+                  Approve
+                </button>
+                <button
+                  onClick={() => handleReject(user.id)}
+                  disabled={!!actionLoading[user.id]}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium transition-colors disabled:opacity-60 border border-red-200"
+                >
+                  {actionLoading[user.id] === "rejecting"
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : <UserX className="w-4 h-4" />}
+                  Reject
+                </button>
+              </div>
+            )}
           </div>
         </div>
       ))}
@@ -1987,6 +2002,7 @@ function ChangeCountryModal({ userId, currentCountry, displayName, onClose, onSa
 
 // ─── Section: Active Accounts ──────────────────────────────────────────────────
 function ActiveAccounts() {
+  const { isDemo } = useAuth();
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -2044,7 +2060,7 @@ function ActiveAccounts() {
                 <td className="px-4 py-3 text-gray-600">
                   <div className="flex items-center gap-1.5">
                     <span>{acc.country || <span className="text-gray-300 italic">—</span>}</span>
-                    {acc.role !== "admin" && (
+                    {acc.role !== "admin" && !isDemo && (
                       <button
                         onClick={() => setCountryEditTarget(acc)}
                         title="Edit country"
@@ -2065,7 +2081,7 @@ function ActiveAccounts() {
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right">
-                  {acc.role !== "admin" && (
+                  {acc.role !== "admin" && !isDemo && (
                     <button
                       onClick={() => setDeleteTarget(acc)}
                       title="Delete account"
@@ -2900,6 +2916,7 @@ function InventoryResolveModal({ discrepancy, onClose }) {
 
 // ─── Section: Discrepancies ────────────────────────────────────────────────────
 function DiscrepanciesSection() {
+  const { isDemo } = useAuth();
   const [demands, setDemands] = useState([]);
   const [activeMrp, setActiveMrp] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -3178,7 +3195,7 @@ function DiscrepanciesSection() {
                       <p className="text-xs text-blue-700 font-medium">Chose: {disc.message.resolvedQty?.toFixed(2) ?? "—"} t</p>
                       <p className="text-xs text-gray-400 mt-0.5">({disc.message.adminChoice === "demand" ? "manual demand" : "MRP"})</p>
                     </div>
-                  ) : (
+                  ) : !isDemo ? (
                     <div className="flex items-center gap-2">
                       <button
                         onClick={(e) => { e.stopPropagation(); setResolveTarget(disc); }}
@@ -3195,7 +3212,7 @@ function DiscrepanciesSection() {
                         {disc.message ? "Re-message" : "Message"}
                       </button>
                     </div>
-                  )}
+                  ) : null}
                 </td>
               </tr>
             ))}
@@ -3254,7 +3271,7 @@ function DiscrepanciesSection() {
                       <p className="text-xs text-blue-700 font-medium">Accepted: {disc.message.resolvedQty?.toFixed(2) ?? "—"} t</p>
                       <p className="text-xs text-gray-400 mt-0.5">({disc.message.adminChoice === "demand" ? "demand planner" : "MRP"})</p>
                     </div>
-                  ) : (
+                  ) : !isDemo ? (
                     <div className="flex items-center gap-2">
                       <button
                         onClick={(e) => { e.stopPropagation(); setInvResolveTarget(disc); }}
@@ -3271,7 +3288,7 @@ function DiscrepanciesSection() {
                         {disc.message ? "Re-message" : "Message"}
                       </button>
                     </div>
-                  )}
+                  ) : null}
                 </td>
               </tr>
             ))}
@@ -3549,7 +3566,7 @@ function DeleteOrderModal({ order, onClose }) {
 }
 
 function OrdersSection() {
-  const { currentUser, userProfile } = useAuth();
+  const { currentUser, userProfile, isDemo } = useAuth();
   const [orders, setOrders] = useState([]);
   const [users, setUsers] = useState([]);
   const [products, setProducts] = useState([]);
@@ -3807,7 +3824,7 @@ function OrdersSection() {
       )}
 
       {/* Country list for creating orders */}
-      {view === "open" && (
+      {view === "open" && !isDemo && (
         <div>
           <p className="text-xs text-gray-400 mb-3">Click a country to create an order based on calculated quantities.</p>
           {countries.length === 0 ? (
@@ -4023,12 +4040,16 @@ function OrdersSection() {
                         </>
                       ) : (
                         <>
-                          <button onClick={() => startEdit(order)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-600 border border-gray-200 hover:border-[#4A9E4A] hover:text-[#2D6A2D] transition-colors">
-                            <Pencil className="w-3.5 h-3.5" />Edit Order
-                          </button>
-                          <button onClick={() => setDeleteTarget(order)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 border border-red-200 hover:bg-red-50 transition-colors">
-                            <Trash2 className="w-3.5 h-3.5" />Delete
-                          </button>
+                          {!isDemo && (
+                            <button onClick={() => startEdit(order)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-gray-600 border border-gray-200 hover:border-[#4A9E4A] hover:text-[#2D6A2D] transition-colors">
+                              <Pencil className="w-3.5 h-3.5" />Edit Order
+                            </button>
+                          )}
+                          {!isDemo && (
+                            <button onClick={() => setDeleteTarget(order)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 border border-red-200 hover:bg-red-50 transition-colors">
+                              <Trash2 className="w-3.5 h-3.5" />Delete
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
@@ -4143,7 +4164,7 @@ function MaterialFormatInfoModal({ onClose }) {
 }
 
 // ─── Material Management ─────────────────────────────────────────────────────
-function BatchTable({ material, batchList, onDelete, deletingId }) {
+function BatchTable({ material, batchList, onDelete, deletingId, isDemo }) {
   const fmtDate = (raw) => {
     const d = raw?.toDate?.() || (raw instanceof Date ? raw : null);
     if (!d) return "—";
@@ -4182,9 +4203,11 @@ function BatchTable({ material, batchList, onDelete, deletingId }) {
                 <td className="py-2 text-right text-gray-500 text-xs">{fmtDate(b.deliveredAt)}</td>
                 <td className="py-2 pl-4 text-gray-400 text-xs">{b.notes || "—"}</td>
                 <td className="py-2 text-right">
-                  <button onClick={() => onDelete(b.id)} disabled={deletingId === b.id} className="text-gray-300 hover:text-red-500 transition-colors">
-                    {deletingId === b.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                  </button>
+                  {!isDemo && (
+                    <button onClick={() => onDelete(b.id)} disabled={deletingId === b.id} className="text-gray-300 hover:text-red-500 transition-colors">
+                      {deletingId === b.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -4196,6 +4219,7 @@ function BatchTable({ material, batchList, onDelete, deletingId }) {
 }
 
 function MaterialManagement() {
+  const { isDemo } = useAuth();
   const [subTab, setSubTab] = useState("inventory");
   const [batches, setBatches] = useState([]);
   const [products, setProducts] = useState([]);
@@ -4534,12 +4558,16 @@ function MaterialManagement() {
       {subTab === "inventory" && (
         <div className="space-y-4 pt-1">
           <div className="flex gap-2 flex-wrap items-center">
-            <button onClick={() => setShowAddForm(v => !v)} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-medium transition-colors">
-              <Plus className="w-4 h-4" /> Add Batch
-            </button>
-            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-200 hover:border-[#4A9E4A] text-gray-600 hover:text-[#2D6A2D] text-sm font-medium transition-colors">
-              <Upload className="w-4 h-4" /> Upload Excel
-            </button>
+            {!isDemo && (
+              <button onClick={() => setShowAddForm(v => !v)} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-medium transition-colors">
+                <Plus className="w-4 h-4" /> Add Batch
+              </button>
+            )}
+            {!isDemo && (
+              <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-200 hover:border-[#4A9E4A] text-gray-600 hover:text-[#2D6A2D] text-sm font-medium transition-colors">
+                <Upload className="w-4 h-4" /> Upload Excel
+              </button>
+            )}
             <button onClick={() => setShowFormatInfo(true)} className="flex items-center gap-1.5 px-2.5 py-2 rounded-xl border border-gray-200 text-gray-400 hover:text-[#2D6A2D] hover:border-[#4A9E4A] text-xs font-medium transition-colors">
               <HelpCircle className="w-3.5 h-3.5" /> Format
             </button>
@@ -4585,8 +4613,8 @@ function MaterialManagement() {
             </div>
           )}
 
-          <BatchTable material="isomalt" batchList={isomaltBatches} onDelete={handleDeleteBatch} deletingId={deletingId} />
-          <BatchTable material="sugar" batchList={sugarBatches} onDelete={handleDeleteBatch} deletingId={deletingId} />
+          <BatchTable material="isomalt" batchList={isomaltBatches} onDelete={handleDeleteBatch} deletingId={deletingId} isDemo={isDemo} />
+          <BatchTable material="sugar" batchList={sugarBatches} onDelete={handleDeleteBatch} deletingId={deletingId} isDemo={isDemo} />
         </div>
       )}
 
@@ -4608,10 +4636,12 @@ function MaterialManagement() {
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Glucose Safety Stock (t)</label>
               <input type="number" step="0.01" min="0" value={sugarSS} onChange={e => setSugarSS(e.target.value)} placeholder="0.00" className="w-36 px-3 py-2 rounded-xl border border-gray-200 text-sm text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
             </div>
-            <button onClick={handleSaveSettings} disabled={savingSettings} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-50 transition-colors">
-              {savingSettings ? <Loader2 className="w-4 h-4 animate-spin" /> : settingsSaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-              {settingsSaved ? "Saved!" : "Save Targets"}
-            </button>
+            {!isDemo && (
+              <button onClick={handleSaveSettings} disabled={savingSettings} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold disabled:opacity-50 transition-colors">
+                {savingSettings ? <Loader2 className="w-4 h-4 animate-spin" /> : settingsSaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+                {settingsSaved ? "Saved!" : "Save Targets"}
+              </button>
+            )}
             <button onClick={() => handleExport().catch(console.error)} className="ml-auto flex items-center gap-2 px-3 py-2 rounded-xl border border-[#2D6A2D] text-[#2D6A2D] hover:bg-[#2D6A2D] hover:text-white text-sm font-semibold transition-colors">
               <Download className="w-4 h-4" /> Export Excel
             </button>

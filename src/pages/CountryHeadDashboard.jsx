@@ -710,7 +710,7 @@ function StockFlowSubTab({ demands, inventory, wasteRecords, messages, products 
 
 // ─── Inventory Tab ─────────────────────────────────────────────────────────────
 function CountryInventoryTab({ userProfile, products }) {
-  const { currentUser } = useAuth();
+  const { currentUser, isDemo } = useAuth();
   const [inventory, setInventory] = useState([]);
   const [demands, setDemands] = useState([]);
   const [messages, setMessages] = useState([]);
@@ -803,7 +803,7 @@ function CountryInventoryTab({ userProfile, products }) {
   const latestDemand = [...demands].sort((a, b) => (b.submittedAt?.seconds ?? 0) - (a.submittedAt?.seconds ?? 0))[0] ?? null;
   // baseDemand: prefer current month; fall back to most recent for inventory display
   const baseDemand = currentDemand ?? latestDemand;
-  const baseDemandTimeSec = baseDemand?.submittedAt?.seconds ?? 0;
+  const baseDemandTimeSec = baseDemand?.month ? Math.floor(parseMonthToDate(baseDemand.month).getTime() / 1000) : 0;
 
   const getExpectedDemand = (productKey, allPKeys = [productKey]) => {
     const resolvedMsg = messages.find(m =>
@@ -873,13 +873,15 @@ function CountryInventoryTab({ userProfile, products }) {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => setShowWasteModal(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
-        >
-          <TrendingDown className="w-3.5 h-3.5" />
-          Record Waste
-        </button>
+        {!isDemo && (
+          <button
+            onClick={() => setShowWasteModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+          >
+            <TrendingDown className="w-3.5 h-3.5" />
+            Record Waste
+          </button>
+        )}
       </div>
 
       {subTab === "stock" && (
@@ -948,7 +950,7 @@ function CountryInventoryTab({ userProfile, products }) {
                                   ) : <span className="text-gray-400">Not delivered</span>}
                                 </td>
                                 <td className="px-4 py-2.5 text-right">
-                                  {!batch.deliveredAt && (
+                                  {!batch.deliveredAt && !isDemo && (
                                     <button onClick={() => handleMarkDelivered(batch)} disabled={marking === batch.id}
                                       className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 disabled:opacity-60 transition-colors">
                                       {marking === batch.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Truck className="w-3 h-3" />}
@@ -1055,7 +1057,7 @@ function CountryInventoryTab({ userProfile, products }) {
 
 // ─── Messages Tab ──────────────────────────────────────────────────────────────
 function MessagesTab({ userProfile }) {
-  const { currentUser } = useAuth();
+  const { currentUser, isDemo } = useAuth();
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [responses, setResponses] = useState({});
@@ -1227,14 +1229,16 @@ function MessagesTab({ userProfile }) {
                 rows={2}
                 className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
               />
-              <button
-                onClick={() => handleSubmitDecision(msg)}
-                disabled={submitting === msg.id || !choices[msg.id]}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
-              >
-                {submitting === msg.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                Submit Decision
-              </button>
+              {!isDemo && (
+                <button
+                  onClick={() => handleSubmitDecision(msg)}
+                  disabled={submitting === msg.id || !choices[msg.id]}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60"
+                >
+                  {submitting === msg.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  Submit Decision
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1245,7 +1249,7 @@ function MessagesTab({ userProfile }) {
 
 // ─── Country Orders Tab ───────────────────────────────────────────────────────
 function CountryOrdersTab({ userProfile, products }) {
-  const { currentUser } = useAuth();
+  const { currentUser, isDemo } = useAuth();
   const [orders, setOrders] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [activeMrp, setActiveMrp] = useState(null);
@@ -1447,46 +1451,50 @@ function CountryOrdersTab({ userProfile, products }) {
                 <p className="text-sm text-blue-800">{order.countryHeadComment}</p>
               </div>
             )}
-            <div className="space-y-2">
-              <textarea
-                value={comments[order.id] || ""}
-                onChange={e => setComments(prev => ({ ...prev, [order.id]: e.target.value }))}
-                placeholder="Add a comment for the admin…"
-                rows={2}
-                className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
-              />
-              <button
-                onClick={() => handleSendComment(order)}
-                disabled={submittingComment === order.id || !(comments[order.id] || "").trim()}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-50 transition-colors"
-              >
-                {submittingComment === order.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                Send Comment
-              </button>
-            </div>
+            {!isDemo && (
+              <div className="space-y-2">
+                <textarea
+                  value={comments[order.id] || ""}
+                  onChange={e => setComments(prev => ({ ...prev, [order.id]: e.target.value }))}
+                  placeholder="Add a comment for the admin…"
+                  rows={2}
+                  className="w-full px-3 py-2.5 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-[#4A9E4A] text-sm resize-none"
+                />
+                <button
+                  onClick={() => handleSendComment(order)}
+                  disabled={submittingComment === order.id || !(comments[order.id] || "").trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-50 transition-colors"
+                >
+                  {submittingComment === order.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                  Send Comment
+                </button>
+              </div>
+            )}
 
             {/* Receive / Undo buttons */}
-            <div className="flex gap-3 pt-1 border-t border-gray-100">
-              {!isReceived ? (
-                <button
-                  onClick={() => handleMarkReceived(order)}
-                  disabled={marking !== null || order.status === "received" || undoing !== null}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-60 transition-colors"
-                >
-                  {marking === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
-                  Order Received
-                </button>
-              ) : (
-                <button
-                  onClick={() => handleUndoReceipt(order)}
-                  disabled={undoing === order.id}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-60 transition-colors"
-                >
-                  {undoing === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
-                  Undo Receipt
-                </button>
-              )}
-            </div>
+            {!isDemo && (
+              <div className="flex gap-3 pt-1 border-t border-gray-100">
+                {!isReceived ? (
+                  <button
+                    onClick={() => handleMarkReceived(order)}
+                    disabled={marking !== null || order.status === "received" || undoing !== null}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-60 transition-colors"
+                  >
+                    {marking === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
+                    Order Received
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleUndoReceipt(order)}
+                    disabled={undoing === order.id}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-60 transition-colors"
+                  >
+                    {undoing === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <X className="w-4 h-4" />}
+                    Undo Receipt
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
@@ -1496,7 +1504,7 @@ function CountryOrdersTab({ userProfile, products }) {
 
 // ─── Calculated Order Tab ─────────────────────────────────────────────────────
 function CalculatedOrderTab({ userProfile, products }) {
-  const { currentUser } = useAuth();
+  const { currentUser, isDemo } = useAuth();
   const [inventory, setInventory] = useState([]);
   const [activeMrp, setActiveMrp] = useState(null);
   const [demands, setDemands] = useState([]);
@@ -1699,14 +1707,16 @@ function CalculatedOrderTab({ userProfile, products }) {
                         return exp.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
                       })()}</td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          onClick={() => handleMarkReceived(batch)}
-                          disabled={marking === batch.id}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-60 transition-colors"
-                        >
-                          {marking === batch.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
-                          Order Received
-                        </button>
+                        {!isDemo && (
+                          <button
+                            onClick={() => handleMarkReceived(batch)}
+                            disabled={marking === batch.id}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white disabled:opacity-60 transition-colors"
+                          >
+                            {marking === batch.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Truck className="w-3.5 h-3.5" />}
+                            Order Received
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -1722,7 +1732,7 @@ function CalculatedOrderTab({ userProfile, products }) {
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 export default function CountryHeadDashboard() {
-  const { currentUser, userProfile, refreshProfile } = useAuth();
+  const { currentUser, userProfile, refreshProfile, isDemo } = useAuth();
 
   const [activeTab, setActiveTab] = useState("demand");
 
@@ -2029,14 +2039,16 @@ export default function CountryHeadDashboard() {
                 {CURRENT_MONTH}
               </p>
             </div>
-            <button
-              onClick={() => setShowChangeCountry(true)}
-              title={userProfile?.country ? "Change your country" : "Set your country"}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-[#4A9E4A] hover:text-[#2D6A2D] text-xs font-medium transition-colors"
-            >
-              <Edit3 className="w-3.5 h-3.5" />
-              {userProfile?.country ? "Change Country" : "Set Country"}
-            </button>
+            {!isDemo && (
+              <button
+                onClick={() => setShowChangeCountry(true)}
+                title={userProfile?.country ? "Change your country" : "Set your country"}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-500 hover:border-[#4A9E4A] hover:text-[#2D6A2D] text-xs font-medium transition-colors"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                {userProfile?.country ? "Change Country" : "Set Country"}
+              </button>
+            )}
           </div>
         </div>
 
@@ -2077,7 +2089,7 @@ export default function CountryHeadDashboard() {
                     ))}
                   </select>
                 </div>
-                {existingDoc && !editMode && (
+                {existingDoc && !editMode && !isDemo && (
                   <button
                     onClick={startEdit}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:border-[#4A9E4A] hover:text-[#2D6A2D] text-xs font-medium transition-colors"
@@ -2328,16 +2340,18 @@ export default function CountryHeadDashboard() {
                     )}
 
                     <div className="flex gap-3">
-                      <button
-                        type="submit"
-                        disabled={submitting}
-                        className="flex items-center gap-2 px-6 py-3 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60 shadow-sm"
-                      >
-                        {submitting
-                          ? <Loader2 className="w-4 h-4 animate-spin" />
-                          : editMode ? <Save className="w-4 h-4" /> : <Send className="w-4 h-4" />}
-                        {editMode ? "Save Changes" : "Submit Demand"}
-                      </button>
+                      {!isDemo && (
+                        <button
+                          type="submit"
+                          disabled={submitting}
+                          className="flex items-center gap-2 px-6 py-3 rounded-xl bg-[#2D6A2D] hover:bg-[#1A4A1A] text-white text-sm font-semibold transition-colors disabled:opacity-60 shadow-sm"
+                        >
+                          {submitting
+                            ? <Loader2 className="w-4 h-4 animate-spin" />
+                            : editMode ? <Save className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+                          {editMode ? "Save Changes" : "Submit Demand"}
+                        </button>
+                      )}
 
                       {editMode && (
                         <button
