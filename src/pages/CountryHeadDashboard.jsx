@@ -121,6 +121,24 @@ function batchBelongsToPeriod(batch, monthStr) {
   return d.getFullYear() === Number(mYear) && MONTHS.indexOf(mName) === d.getMonth();
 }
 
+// FIFO attribution: given a submitted opening-stock qty and the prior order batches it covers,
+// compute surviving allocation (newest batches first) vs. consumed (oldest first).
+function fifoAttribution(submittedQty, priorBatches) {
+  if (priorBatches.length === 0) return { attributed: [], adjustment: submittedQty };
+  const sorted = [...priorBatches].sort((a, b) => (a.deliveredAt?.seconds ?? 0) - (b.deliveredAt?.seconds ?? 0));
+  const allocations = new Array(sorted.length).fill(0);
+  let remaining = submittedQty;
+  for (let i = sorted.length - 1; i >= 0 && remaining > 0.001; i--) {
+    const alloc = Math.min(sorted[i].qty || 0, remaining);
+    allocations[i] = alloc;
+    remaining -= alloc;
+  }
+  return {
+    attributed: sorted.map((batch, i) => ({ batch, allocatedQty: allocations[i], fullyConsumed: allocations[i] < 0.001 })),
+    adjustment: Math.max(0, remaining),
+  };
+}
+
 // ─── Change Country Modal ─────────────────────────────────────────────────────
 function ChangeCountryModal({ userId, currentCountry, onClose, onSaved }) {
   const [knownCountries, setKnownCountries] = useState([]);
@@ -934,33 +952,88 @@ function CountryInventoryTab({ userProfile, products }) {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {batches.map(batch => {
-                            const computedExpiry = getComputedExpiry(batch, product.shelfLifeMonths);
+                          {(() => {
+                            const hasSubmittedInventory = submittedCurrentQty != null && submittedCurrentQty > 0;
+                            // Order batches delivered before the submission period — covered by the submitted qty via FIFO
+                            const priorOrderBatches = hasSubmittedInventory
+                              ? batches.filter(b => b.source === "order" && b.deliveredAt && baseDemandTimeSec > 0 && (b.deliveredAt.seconds ?? 0) < baseDemandTimeSec)
+                              : [];
+                            const otherBatches = batches.filter(b => !priorOrderBatches.includes(b));
+                            const { attributed, adjustment } = hasSubmittedInventory && priorOrderBatches.length > 0
+                              ? fifoAttribution(submittedCurrentQty, priorOrderBatches)
+                              : { attributed: [], adjustment: submittedCurrentQty ?? 0 };
+                            const showOpeningBalance = hasSubmittedInventory && (priorOrderBatches.length === 0 || adjustment > 0.001);
                             return (
-                              <tr key={batch.id} className="hover:bg-white transition-colors">
-                                <td className="px-4 py-2.5 text-gray-700">{batch.batchId || <span className="text-gray-300 italic">—</span>}</td>
-                                <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-[#2D6A2D]">{(batch.qty ?? 0).toFixed(2)}</td>
-                                <td className="px-4 py-2.5 text-gray-600">{fmtDate(computedExpiry)}</td>
-                                <td className="px-4 py-2.5">
-                                  {batch.deliveredAt ? (
-                                    <div className="flex items-center gap-1">
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
-                                      <span className="text-green-700 font-medium">Delivered {fmtDateTime(batch.deliveredAt)}</span>
-                                    </div>
-                                  ) : <span className="text-gray-400">Not delivered</span>}
-                                </td>
-                                <td className="px-4 py-2.5 text-right">
-                                  {!batch.deliveredAt && !isDemo && (
-                                    <button onClick={() => handleMarkDelivered(batch)} disabled={marking === batch.id}
-                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 disabled:opacity-60 transition-colors">
-                                      {marking === batch.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Truck className="w-3 h-3" />}
-                                      Mark Delivered
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
+                              <>
+                                {/* FIFO-attributed prior order batches */}
+                                {attributed.map(({ batch, allocatedQty, fullyConsumed }) => {
+                                  const computedExpiry = getComputedExpiry(batch, product.shelfLifeMonths);
+                                  return (
+                                    <tr key={batch.id} className={fullyConsumed ? "opacity-40 transition-colors" : "hover:bg-white transition-colors"}>
+                                      <td className="px-4 py-2.5 text-gray-700">
+                                        {batch.batchId || <span className="text-gray-300 italic">—</span>}
+                                        {fullyConsumed && <span className="ml-1.5 text-[10px] text-gray-400 italic">(consumed)</span>}
+                                      </td>
+                                      <td className={`px-4 py-2.5 text-right tabular-nums font-semibold ${fullyConsumed ? "text-gray-300 line-through" : "text-[#2D6A2D]"}`}>
+                                        {fullyConsumed ? (batch.qty ?? 0).toFixed(2) : allocatedQty.toFixed(2)}
+                                        {!fullyConsumed && allocatedQty < (batch.qty || 0) - 0.001 && (
+                                          <span className="text-gray-400 font-normal text-[10px] ml-1">of {(batch.qty || 0).toFixed(2)}</span>
+                                        )}
+                                      </td>
+                                      <td className="px-4 py-2.5 text-gray-600">{fmtDate(computedExpiry)}</td>
+                                      <td className="px-4 py-2.5">
+                                        <div className="flex items-center gap-1">
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+                                          <span className="text-green-700 font-medium">Delivered {fmtDateTime(batch.deliveredAt)}</span>
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-2.5" />
+                                    </tr>
+                                  );
+                                })}
+                                {/* Opening balance: submitted qty not covered by any prior order batch */}
+                                {showOpeningBalance && (
+                                  <tr className="bg-blue-50/30 transition-colors">
+                                    <td className="px-4 py-2.5 text-blue-600 italic text-sm">Opening balance</td>
+                                    <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-blue-700">
+                                      {adjustment > 0.001 ? adjustment.toFixed(2) : (submittedCurrentQty ?? 0).toFixed(2)}
+                                    </td>
+                                    <td className="px-4 py-2.5 text-gray-400 text-xs">—</td>
+                                    <td className="px-4 py-2.5 text-blue-400 text-xs">Demand submission</td>
+                                    <td className="px-4 py-2.5" />
+                                  </tr>
+                                )}
+                                {/* Other batches: non-order or post-period orders, shown at face value */}
+                                {otherBatches.map(batch => {
+                                  const computedExpiry = getComputedExpiry(batch, product.shelfLifeMonths);
+                                  return (
+                                    <tr key={batch.id} className="hover:bg-white transition-colors">
+                                      <td className="px-4 py-2.5 text-gray-700">{batch.batchId || <span className="text-gray-300 italic">—</span>}</td>
+                                      <td className="px-4 py-2.5 text-right tabular-nums font-semibold text-[#2D6A2D]">{(batch.qty ?? 0).toFixed(2)}</td>
+                                      <td className="px-4 py-2.5 text-gray-600">{fmtDate(computedExpiry)}</td>
+                                      <td className="px-4 py-2.5">
+                                        {batch.deliveredAt ? (
+                                          <div className="flex items-center gap-1">
+                                            <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+                                            <span className="text-green-700 font-medium">Delivered {fmtDateTime(batch.deliveredAt)}</span>
+                                          </div>
+                                        ) : <span className="text-gray-400">Not delivered</span>}
+                                      </td>
+                                      <td className="px-4 py-2.5 text-right">
+                                        {!batch.deliveredAt && !isDemo && (
+                                          <button onClick={() => handleMarkDelivered(batch)} disabled={marking === batch.id}
+                                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[#2D6A2D] border border-[#2D6A2D] hover:bg-green-50 disabled:opacity-60 transition-colors">
+                                            {marking === batch.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Truck className="w-3 h-3" />}
+                                            Mark Delivered
+                                          </button>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </>
                             );
-                          })}
+                          })()}
                         </tbody>
                       </table>
                     </div>

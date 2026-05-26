@@ -56,6 +56,24 @@ function monthStartSec(monthStr) {
   return Math.floor(new Date(parseInt(year), idx, 1).getTime() / 1000);
 }
 
+// Given a submitted opening-stock qty and the prior order batches it covers (delivered before
+// the submission period), compute surviving FIFO allocation: oldest consumed first, newest survive.
+function fifoAttribution(submittedQty, priorBatches) {
+  if (priorBatches.length === 0) return { attributed: [], adjustment: submittedQty };
+  const sorted = [...priorBatches].sort((a, b) => (a.deliveredAt?.seconds ?? 0) - (b.deliveredAt?.seconds ?? 0));
+  const allocations = new Array(sorted.length).fill(0);
+  let remaining = submittedQty;
+  for (let i = sorted.length - 1; i >= 0 && remaining > 0.001; i--) {
+    const alloc = Math.min(sorted[i].qty || 0, remaining);
+    allocations[i] = alloc;
+    remaining -= alloc;
+  }
+  return {
+    attributed: sorted.map((batch, i) => ({ batch, allocatedQty: allocations[i], fullyConsumed: allocations[i] < 0.001 })),
+    adjustment: Math.max(0, remaining),
+  };
+}
+
 function computeExpiry(batch, shelfLifeMonths) {
   if (batch.expiryDate) return batch.expiryDate.toDate?.() ?? batch.expiryDate;
   const base = batch.deliveredAt?.toDate?.() ?? batch.deliveredAt;
@@ -758,7 +776,7 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
       if (b.source === "order" && b.deliveredAt && baseSec > 0 && (b.deliveredAt.seconds ?? 0) < baseSec) return s;
       return s + (b.qty || 0);
     }, 0);
-    return { ...r, currentQty: batchQty + r.submittedQty, productName: productMap[r.productKey]?.name ?? r.productKey };
+    return { ...r, currentQty: batchQty + r.submittedQty, productName: productMap[r.productKey]?.name ?? r.productKey, baseSec };
   }).filter(r => !hiddenProductKeys.has(r.productKey));
 
   const sortFn = {
@@ -856,7 +874,11 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
                             {row.currentQty > 0 ? row.currentQty.toFixed(2) : <span className="text-gray-300">—</span>}
                           </td>
                           <td className="px-4 py-3 text-right text-xs text-gray-400">
-                            {row.currentBatches.filter(b => b.source !== "mrp").length + (row.submittedQty > 0 ? 1 : 0)}
+                            {(() => {
+                                const bSec = row.baseSec ?? 0;
+                                const hasPrior = row.submittedQty > 0 && bSec > 0 && row.currentBatches.some(b => b.source === "order" && b.deliveredAt && (b.deliveredAt.seconds ?? 0) < bSec);
+                                return row.currentBatches.filter(b => b.source !== "mrp").length + (row.submittedQty > 0 && !hasPrior ? 1 : 0);
+                              })()}
                           </td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1 justify-end">
@@ -890,48 +912,103 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-gray-50">
-                                    {row.submittedQty > 0 && (
-                                      <tr className="bg-blue-50/40">
-                                        <td className="px-3 py-2 text-blue-600 font-medium italic">Manual submission</td>
-                                        <td className="px-3 py-2 tabular-nums font-semibold text-blue-700">{row.submittedQty.toFixed(2)}</td>
-                                        <td className="px-3 py-2 text-gray-500">{row.submittedExpiry ? fmtDate(row.submittedExpiry) : <span className="text-gray-300">—</span>}</td>
-                                        <td className="px-3 py-2 text-blue-400 text-xs">Demand planner</td>
-                                        <td className="px-3 py-2">
-                                          {row.demandDoc && !isDemo && (
-                                            <button
-                                              onClick={() => setEditSubmission({ demand: row.demandDoc, productKey: row.productKey, productName: row.productName, qty: row.submittedQty })}
-                                              className="p-1 rounded text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                                              title="Edit submission"
-                                            >
-                                              <Pencil className="w-3 h-3" />
-                                            </button>
-                                          )}
-                                        </td>
-                                      </tr>
-                                    )}
                                     {(() => {
-                                      const totalMrpQty = row.currentBatches.filter(b => b.source === "mrp").reduce((s, b) => s + (b.qty || 0), 0);
+                                      const bSec = row.baseSec ?? 0;
+                                      const mrpBatches = row.currentBatches.filter(b => b.source === "mrp");
+                                      const totalMrpQty = mrpBatches.reduce((s, b) => s + (b.qty || 0), 0);
                                       const mrpReconciled = row.submittedQty > 0 && Math.abs(totalMrpQty - row.submittedQty) < 0.01;
-                                      return row.currentBatches.map(b => {
-                                        const isMrp = b.source === "mrp";
-                                        if (isMrp && mrpReconciled) return null;
-                                        return (
-                                          <tr key={b.id} className={isMrp ? "opacity-50 bg-gray-50/50" : "hover:bg-white"}>
-                                            <td className="px-3 py-2 text-gray-600">{b.batchId || "—"}</td>
-                                            <td className={`px-3 py-2 tabular-nums font-semibold ${isMrp ? "text-gray-400" : "text-[#2D6A2D]"}`}>{(b.qty ?? 0).toFixed(2)}</td>
-                                            <td className="px-3 py-2 text-gray-500">{fmtDate(computeExpiry(b, productMap[b.productKey]?.shelfLifeMonths))}</td>
-                                            <td className="px-3 py-2 text-gray-400">{isMrp ? <span className="italic text-gray-300">mrp (ref only)</span> : (b.source || "—")}</td>
-                                            <td className="px-3 py-2">
-                                              {!isDemo && (
-                                                <div className="flex gap-1 justify-end">
-                                                  <button onClick={() => setEditTarget(b)} className="p-1 rounded text-gray-300 hover:text-[#2D6A2D] hover:bg-green-50 transition-colors" title="Edit"><Pencil className="w-3 h-3" /></button>
-                                                  <button onClick={() => setDeleteTarget(b)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete"><Trash2 className="w-3 h-3" /></button>
-                                                </div>
-                                              )}
-                                            </td>
-                                          </tr>
-                                        );
-                                      });
+                                      // Order batches delivered before the submission period — these are covered by submittedQty via FIFO
+                                      const priorOrderBatches = row.currentBatches.filter(b =>
+                                        b.source === "order" && b.deliveredAt && bSec > 0 && (b.deliveredAt.seconds ?? 0) < bSec
+                                      );
+                                      // All other non-MRP batches shown at face value
+                                      const otherBatches = row.currentBatches.filter(b =>
+                                        b.source !== "mrp" && !priorOrderBatches.includes(b)
+                                      );
+                                      const { attributed, adjustment } = row.submittedQty > 0 && priorOrderBatches.length > 0
+                                        ? fifoAttribution(row.submittedQty, priorOrderBatches)
+                                        : { attributed: [], adjustment: row.submittedQty };
+                                      // Show opening balance row when no prior batches exist to attribute to, or when there's leftover
+                                      const showOpeningBalance = row.submittedQty > 0 && (priorOrderBatches.length === 0 || adjustment > 0.001);
+                                      return (
+                                        <>
+                                          {/* FIFO-attributed prior order batches */}
+                                          {attributed.map(({ batch: b, allocatedQty, fullyConsumed }) => (
+                                            <tr key={b.id} className={fullyConsumed ? "opacity-40 bg-gray-50/50" : "hover:bg-white"}>
+                                              <td className="px-3 py-2 text-gray-600">
+                                                {b.batchId || "—"}
+                                                {fullyConsumed && <span className="ml-1.5 text-[10px] text-gray-400 italic">(consumed)</span>}
+                                              </td>
+                                              <td className={`px-3 py-2 tabular-nums font-semibold ${fullyConsumed ? "text-gray-300 line-through" : "text-[#2D6A2D]"}`}>
+                                                {fullyConsumed ? (b.qty ?? 0).toFixed(2) : allocatedQty.toFixed(2)}
+                                                {!fullyConsumed && allocatedQty < (b.qty || 0) - 0.001 && (
+                                                  <span className="text-gray-400 font-normal text-[10px] ml-1">of {(b.qty || 0).toFixed(2)}</span>
+                                                )}
+                                              </td>
+                                              <td className="px-3 py-2 text-gray-500">{fmtDate(computeExpiry(b, productMap[b.productKey]?.shelfLifeMonths))}</td>
+                                              <td className="px-3 py-2 text-gray-400">{b.source || "—"}</td>
+                                              <td className="px-3 py-2">
+                                                {!isDemo && !fullyConsumed && (
+                                                  <div className="flex gap-1 justify-end">
+                                                    <button onClick={() => setEditTarget(b)} className="p-1 rounded text-gray-300 hover:text-[#2D6A2D] hover:bg-green-50 transition-colors" title="Edit"><Pencil className="w-3 h-3" /></button>
+                                                    <button onClick={() => setDeleteTarget(b)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete"><Trash2 className="w-3 h-3" /></button>
+                                                  </div>
+                                                )}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                          {/* Opening balance: submitted qty with no prior batch to attribute to */}
+                                          {showOpeningBalance && (
+                                            <tr className="bg-blue-50/40">
+                                              <td className="px-3 py-2 text-blue-600 font-medium italic">Opening balance</td>
+                                              <td className="px-3 py-2 tabular-nums font-semibold text-blue-700">
+                                                {adjustment > 0.001 ? adjustment.toFixed(2) : row.submittedQty.toFixed(2)}
+                                              </td>
+                                              <td className="px-3 py-2 text-gray-500">{row.submittedExpiry ? fmtDate(row.submittedExpiry) : <span className="text-gray-300">—</span>}</td>
+                                              <td className="px-3 py-2 text-blue-400 text-xs">Demand planner</td>
+                                              <td className="px-3 py-2">
+                                                {row.demandDoc && !isDemo && (
+                                                  <button onClick={() => setEditSubmission({ demand: row.demandDoc, productKey: row.productKey, productName: row.productName, qty: row.submittedQty })} className="p-1 rounded text-gray-300 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Edit submission"><Pencil className="w-3 h-3" /></button>
+                                                )}
+                                              </td>
+                                            </tr>
+                                          )}
+                                          {/* Other batches: non-order stock or post-period orders, shown at face value */}
+                                          {otherBatches.map(b => (
+                                            <tr key={b.id} className="hover:bg-white">
+                                              <td className="px-3 py-2 text-gray-600">{b.batchId || "—"}</td>
+                                              <td className="px-3 py-2 tabular-nums font-semibold text-[#2D6A2D]">{(b.qty ?? 0).toFixed(2)}</td>
+                                              <td className="px-3 py-2 text-gray-500">{fmtDate(computeExpiry(b, productMap[b.productKey]?.shelfLifeMonths))}</td>
+                                              <td className="px-3 py-2 text-gray-400">{b.source || "—"}</td>
+                                              <td className="px-3 py-2">
+                                                {!isDemo && (
+                                                  <div className="flex gap-1 justify-end">
+                                                    <button onClick={() => setEditTarget(b)} className="p-1 rounded text-gray-300 hover:text-[#2D6A2D] hover:bg-green-50 transition-colors" title="Edit"><Pencil className="w-3 h-3" /></button>
+                                                    <button onClick={() => setDeleteTarget(b)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete"><Trash2 className="w-3 h-3" /></button>
+                                                  </div>
+                                                )}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                          {/* MRP batches — reference only */}
+                                          {mrpBatches.map(b => mrpReconciled ? null : (
+                                            <tr key={b.id} className="opacity-50 bg-gray-50/50">
+                                              <td className="px-3 py-2 text-gray-600">{b.batchId || "—"}</td>
+                                              <td className="px-3 py-2 tabular-nums font-semibold text-gray-400">{(b.qty ?? 0).toFixed(2)}</td>
+                                              <td className="px-3 py-2 text-gray-500">{fmtDate(computeExpiry(b, productMap[b.productKey]?.shelfLifeMonths))}</td>
+                                              <td className="px-3 py-2 text-gray-400"><span className="italic text-gray-300">mrp (ref only)</span></td>
+                                              <td className="px-3 py-2">
+                                                {!isDemo && (
+                                                  <div className="flex gap-1 justify-end">
+                                                    <button onClick={() => setEditTarget(b)} className="p-1 rounded text-gray-300 hover:text-[#2D6A2D] hover:bg-green-50 transition-colors" title="Edit"><Pencil className="w-3 h-3" /></button>
+                                                    <button onClick={() => setDeleteTarget(b)} className="p-1 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors" title="Delete"><Trash2 className="w-3 h-3" /></button>
+                                                  </div>
+                                                )}
+                                              </td>
+                                            </tr>
+                                          ))}
+                                        </>
+                                      );
                                     })()}
                                   </tbody>
                                 </table>
