@@ -60,7 +60,12 @@ function monthStartSec(monthStr) {
 // the submission period), compute surviving FIFO allocation: oldest consumed first, newest survive.
 function fifoAttribution(submittedQty, priorBatches) {
   if (priorBatches.length === 0) return { attributed: [], adjustment: submittedQty };
-  const sorted = [...priorBatches].sort((a, b) => (a.deliveredAt?.seconds ?? 0) - (b.deliveredAt?.seconds ?? 0));
+  // Sort by expiry ascending (earliest expiry consumed first; _expiryMs=0 = no expiry = consumed first)
+  const sorted = [...priorBatches].sort((a, b) => {
+    const aMs = a._expiryMs ?? (a.deliveredAt?.seconds != null ? a.deliveredAt.seconds * 1000 : 0);
+    const bMs = b._expiryMs ?? (b.deliveredAt?.seconds != null ? b.deliveredAt.seconds * 1000 : 0);
+    return aMs - bMs;
+  });
   const allocations = new Array(sorted.length).fill(0);
   let remaining = submittedQty;
   for (let i = sorted.length - 1; i >= 0 && remaining > 0.001; i--) {
@@ -770,10 +775,16 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
 
   let rows = Object.values(summaryMap).map(r => {
     const baseSec = r._baseDemandTimeSec ?? 0;
-    // Only count order batches received after the base demand to avoid double-counting initial stock
+    // When a submission exists, all pre-period batches (including non-order opening stock) are covered
+    // by submittedQty via FIFO — exclude them from batchQty to avoid double-counting.
     const batchQty = r.currentBatches.reduce((s, b) => {
-      if (b.source === "mrp") return s; // cross-validation only — qty lives in demand submissions
-      if (b.source === "order" && b.deliveredAt && baseSec > 0 && (b.deliveredAt.seconds ?? 0) < baseSec) return s;
+      if (b.source === "mrp") return s;
+      if (baseSec > 0 && r.submittedQty > 0) {
+        if (!b.deliveredAt) return s; // no timestamp = initial/manual stock, always pre-period
+        if ((b.deliveredAt.seconds ?? 0) < baseSec) return s;
+      } else {
+        if (b.source === "order" && b.deliveredAt && baseSec > 0 && (b.deliveredAt.seconds ?? 0) < baseSec) return s;
+      }
       return s + (b.qty || 0);
     }, 0);
     return { ...r, currentQty: batchQty + r.submittedQty, productName: productMap[r.productKey]?.name ?? r.productKey, baseSec };
@@ -876,7 +887,7 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
                           <td className="px-4 py-3 text-right text-xs text-gray-400">
                             {(() => {
                                 const bSec = row.baseSec ?? 0;
-                                const hasPrior = row.submittedQty > 0 && bSec > 0 && row.currentBatches.some(b => b.source === "order" && b.deliveredAt && (b.deliveredAt.seconds ?? 0) < bSec);
+                                const hasPrior = row.submittedQty > 0 && bSec > 0 && row.currentBatches.some(b => b.source !== "mrp" && (!b.deliveredAt || (b.deliveredAt.seconds ?? 0) < bSec));
                                 return row.currentBatches.filter(b => b.source !== "mrp").length + (row.submittedQty > 0 && !hasPrior ? 1 : 0);
                               })()}
                           </td>
@@ -917,19 +928,29 @@ function StockLevelsTab({ items, products, loading, demands, hiddenProductKeys =
                                       const mrpBatches = row.currentBatches.filter(b => b.source === "mrp");
                                       const totalMrpQty = mrpBatches.reduce((s, b) => s + (b.qty || 0), 0);
                                       const mrpReconciled = row.submittedQty > 0 && Math.abs(totalMrpQty - row.submittedQty) < 0.01;
-                                      // Order batches delivered before the submission period — these are covered by submittedQty via FIFO
-                                      const priorOrderBatches = row.currentBatches.filter(b =>
-                                        b.source === "order" && b.deliveredAt && bSec > 0 && (b.deliveredAt.seconds ?? 0) < bSec
-                                      );
-                                      // All other non-MRP batches shown at face value
+                                      // All pre-period non-MRP batches are covered by submittedQty via FIFO:
+                                      // includes order batches delivered before the period AND non-order batches
+                                      // with no deliveredAt (opening/manual stock always predates the submission).
+                                      const priorBatches = row.currentBatches.filter(b => {
+                                        if (b.source === "mrp") return false;
+                                        if (!b.deliveredAt) return bSec > 0;
+                                        return bSec > 0 && (b.deliveredAt.seconds ?? 0) < bSec;
+                                      });
+                                      // Post-period or non-timestamped-when-no-baseSec batches shown at face value
                                       const otherBatches = row.currentBatches.filter(b =>
-                                        b.source !== "mrp" && !priorOrderBatches.includes(b)
+                                        b.source !== "mrp" && !priorBatches.includes(b)
                                       );
-                                      const { attributed, adjustment } = row.submittedQty > 0 && priorOrderBatches.length > 0
-                                        ? fifoAttribution(row.submittedQty, priorOrderBatches)
+                                      // Pre-annotate expiry for FIFO sort (earliest expiry consumed first)
+                                      const shelfLife = productMap[row.productKey]?.shelfLifeMonths;
+                                      const priorBatchesForFifo = priorBatches.map(b => {
+                                        const exp = computeExpiry(b, shelfLife);
+                                        return { ...b, _expiryMs: exp ? exp.getTime() : 0 };
+                                      });
+                                      const { attributed, adjustment } = row.submittedQty > 0 && priorBatches.length > 0
+                                        ? fifoAttribution(row.submittedQty, priorBatchesForFifo)
                                         : { attributed: [], adjustment: row.submittedQty };
-                                      // Show opening balance row when no prior batches exist to attribute to, or when there's leftover
-                                      const showOpeningBalance = row.submittedQty > 0 && (priorOrderBatches.length === 0 || adjustment > 0.001);
+                                      // Show opening balance only when submitted qty exceeds all trackable prior stock
+                                      const showOpeningBalance = row.submittedQty > 0 && (priorBatches.length === 0 || adjustment > 0.001);
                                       return (
                                         <>
                                           {/* FIFO-attributed prior order batches */}

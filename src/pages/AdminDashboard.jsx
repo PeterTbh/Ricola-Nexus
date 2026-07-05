@@ -3073,10 +3073,13 @@ function DiscrepanciesSection() {
     );
   }
 
+  const currentMonthStart = (() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })();
   const orphanedRows = (activeMrp.rows || []).filter(row => {
     if (!row.country) return false;
     const rowCountry = row.country.trim().toLowerCase();
     const rowPeriod = (row.period || "").trim().toLowerCase();
+    // Skip rows whose period is in the past — they can't be acted on retroactively
+    try { if (parseMonthToDate(row.period) < currentMonthStart) return false; } catch { /* keep row if period is unparseable */ }
     return !demands.some(d => {
       const effectiveCountry = (d.country?.trim() || usersMap[d.userId]?.country?.trim() || "").toLowerCase();
       return d.month?.trim().toLowerCase() === rowPeriod && effectiveCountry === rowCountry;
@@ -3374,7 +3377,8 @@ function CreateOrderModal({ country, countryUserId, products, activeMrp, current
     const allPKeys = product ? [product.key, ...(product.keyHistory || [])] : [productKey];
     const thisMonthDemand = countryDemands.find(d => d.month === CURRENT_MONTH_STR);
     const baseCurrent = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.currentInventory?.[k] ?? null, null) ?? 0;
-    const receivedOrderQty = countryInventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey)).reduce((s, b) => s + (b.qty || 0), 0);
+    const baseSec = thisMonthDemand?.month ? Math.floor(parseMonthToDate(thisMonthDemand.month).getTime() / 1000) : 0;
+    const receivedOrderQty = countryInventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey) && (baseSec === 0 || (i.deliveredAt.seconds ?? 0) >= baseSec)).reduce((s, b) => s + (b.qty || 0), 0);
     const currentQty = baseCurrent + receivedOrderQty;
     const desiredQty = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.desiredInventory?.[k] ?? null, null) ?? 0;
     // Use resolved demand if discrepancy was resolved

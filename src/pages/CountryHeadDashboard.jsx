@@ -125,7 +125,12 @@ function batchBelongsToPeriod(batch, monthStr) {
 // compute surviving allocation (newest batches first) vs. consumed (oldest first).
 function fifoAttribution(submittedQty, priorBatches) {
   if (priorBatches.length === 0) return { attributed: [], adjustment: submittedQty };
-  const sorted = [...priorBatches].sort((a, b) => (a.deliveredAt?.seconds ?? 0) - (b.deliveredAt?.seconds ?? 0));
+  // Sort by expiry ascending (earliest expiry consumed first; _expiryMs=0 = no expiry = consumed first)
+  const sorted = [...priorBatches].sort((a, b) => {
+    const aMs = a._expiryMs ?? (a.deliveredAt?.seconds != null ? a.deliveredAt.seconds * 1000 : 0);
+    const bMs = b._expiryMs ?? (b.deliveredAt?.seconds != null ? b.deliveredAt.seconds * 1000 : 0);
+    return aMs - bMs;
+  });
   const allocations = new Array(sorted.length).fill(0);
   let remaining = submittedQty;
   for (let i = sorted.length - 1; i >= 0 && remaining > 0.001; i--) {
@@ -954,15 +959,23 @@ function CountryInventoryTab({ userProfile, products }) {
                         <tbody className="divide-y divide-gray-100">
                           {(() => {
                             const hasSubmittedInventory = submittedCurrentQty != null && submittedCurrentQty > 0;
-                            // Order batches delivered before the submission period — covered by the submitted qty via FIFO
-                            const priorOrderBatches = hasSubmittedInventory
-                              ? batches.filter(b => b.source === "order" && b.deliveredAt && baseDemandTimeSec > 0 && (b.deliveredAt.seconds ?? 0) < baseDemandTimeSec)
+                            // All pre-period non-MRP batches are covered by submittedQty via FIFO:
+                            // includes order batches delivered before the period AND non-order batches
+                            // with no deliveredAt (opening/manual stock always predates the submission).
+                            const priorBatches = hasSubmittedInventory
+                              ? batches.filter(b => !b.deliveredAt || (baseDemandTimeSec > 0 && (b.deliveredAt.seconds ?? 0) < baseDemandTimeSec))
                               : [];
-                            const otherBatches = batches.filter(b => !priorOrderBatches.includes(b));
-                            const { attributed, adjustment } = hasSubmittedInventory && priorOrderBatches.length > 0
-                              ? fifoAttribution(submittedCurrentQty, priorOrderBatches)
+                            const otherBatches = batches.filter(b => !priorBatches.includes(b));
+                            // Pre-annotate expiry for FIFO sort (earliest expiry consumed first)
+                            const priorBatchesForFifo = priorBatches.map(b => {
+                              const exp = getComputedExpiry(b, product.shelfLifeMonths);
+                              return { ...b, _expiryMs: exp ? exp.getTime() : 0 };
+                            });
+                            const { attributed, adjustment } = hasSubmittedInventory && priorBatches.length > 0
+                              ? fifoAttribution(submittedCurrentQty, priorBatchesForFifo)
                               : { attributed: [], adjustment: submittedCurrentQty ?? 0 };
-                            const showOpeningBalance = hasSubmittedInventory && (priorOrderBatches.length === 0 || adjustment > 0.001);
+                            // Show opening balance only when submitted qty exceeds all trackable prior stock
+                            const showOpeningBalance = hasSubmittedInventory && (priorBatches.length === 0 || adjustment > 0.001);
                             return (
                               <>
                                 {/* FIFO-attributed prior order batches */}
@@ -1371,7 +1384,8 @@ function CountryOrdersTab({ userProfile, products }) {
     const allPKeys = product ? [product.key, ...(product.keyHistory || [])] : [productKey];
     const thisMonth = demands.find(d => d.month === CURRENT_MONTH_STR);
     const baseCurrent = allPKeys.reduce((val, k) => val ?? thisMonth?.currentInventory?.[k] ?? null, null) ?? 0;
-    const receivedOrderQty = inventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey)).reduce((s, b) => s + (b.qty || 0), 0);
+    const baseSec = thisMonth?.month ? Math.floor(parseMonthToDate(thisMonth.month).getTime() / 1000) : 0;
+    const receivedOrderQty = inventory.filter(i => (!i.levelType || i.levelType === "current") && i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey) && (baseSec === 0 || (i.deliveredAt.seconds ?? 0) >= baseSec)).reduce((s, b) => s + (b.qty || 0), 0);
     const currentQty = baseCurrent + receivedOrderQty;
     const desiredQty = allPKeys.reduce((val, k) => val ?? thisMonth?.desiredInventory?.[k] ?? null, null) ?? 0;
     let expectedDemand = allPKeys.reduce((val, k) => val ?? (thisMonth?.[k] != null ? Number(thisMonth[k]) : null), null) ?? 0;
@@ -1674,8 +1688,9 @@ function CalculatedOrderTab({ userProfile, products }) {
 
             // Current and desired come from the demand submission; check all historical keys
             const baseCurrent = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.currentInventory?.[k] ?? null, null) ?? 0;
-            // Add inventory batches from received orders (source: "order") for real-time update
-            const receivedOrderQty = currentItems.filter(i => i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey)).reduce((s, b) => s + (b.qty || 0), 0);
+            // Only count orders received on/after the submission period start (pre-period orders are captured in baseCurrent via FIFO)
+            const baseDemandTimeSec = thisMonthDemand?.month ? Math.floor(parseMonthToDate(thisMonthDemand.month).getTime() / 1000) : 0;
+            const receivedOrderQty = currentItems.filter(i => i.source === "order" && i.deliveredAt && allPKeys.includes(i.productKey) && (baseDemandTimeSec === 0 || (i.deliveredAt.seconds ?? 0) >= baseDemandTimeSec)).reduce((s, b) => s + (b.qty || 0), 0);
             const currentQty = baseCurrent + receivedOrderQty;
             const desiredQty = allPKeys.reduce((val, k) => val ?? thisMonthDemand?.desiredInventory?.[k] ?? null, null) ?? 0;
 
